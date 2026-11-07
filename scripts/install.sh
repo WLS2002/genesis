@@ -69,8 +69,8 @@ After installing:
   genesis logs     Follow the server log
   genesis stop     Stop the service
 
-Supported platforms: Linux x64, Linux arm64, macOS arm64.
-Windows is not supported by this installer — use the Genesis desktop app.
+Supported platforms: Linux x64/arm64, macOS x64/arm64.
+Native Windows uses scripts/install-windows.py; WSL uses the Linux installer.
 EOF
 }
 
@@ -136,7 +136,7 @@ https://genesis.evox.group"
     Darwin) OS="darwin" ;;
     *)
       die "unsupported operating system: ${_os}
-Available builds: linux_x64, linux_arm64, darwin_arm64.
+Available builds: linux_x64, linux_arm64, darwin_x64, darwin_arm64.
 Windows: use the Genesis desktop app instead."
       ;;
   esac
@@ -147,22 +147,16 @@ Windows: use the Genesis desktop app instead."
     aarch64 | arm64) ARCH="arm64" ;;
     *)
       die "unsupported architecture: ${_arch}
-Available builds: linux_x64, linux_arm64, darwin_arm64."
+Available builds: linux_x64, linux_arm64, darwin_x64, darwin_arm64."
       ;;
   esac
 
   PLATFORM="${OS}_${ARCH}"
   case "$PLATFORM" in
-    linux_x64 | linux_arm64 | darwin_arm64) : ;;
-    darwin_x64)
-      die "no macOS x64 (Intel) build is available.
-Available builds: linux_x64, linux_arm64, darwin_arm64.
-If this is an Apple Silicon Mac with a Rosetta shell, re-run the installer from
-a native arm64 shell: arch -arm64 /bin/sh"
-      ;;
+    linux_x64 | linux_arm64 | darwin_x64 | darwin_arm64) : ;;
     *)
       die "no build available for ${PLATFORM}.
-Available builds: linux_x64, linux_arm64, darwin_arm64."
+Available builds: linux_x64, linux_arm64, darwin_x64, darwin_arm64."
       ;;
   esac
 

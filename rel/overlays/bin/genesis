@@ -381,6 +381,7 @@ systemd_usable() {
 launchd_usable() {
   is_darwin || return 1
   command -v launchctl >/dev/null 2>&1 || return 1
+  launchctl print "$(launchd_domain)" >/dev/null 2>&1 || return 1
   return 0
 }
 
@@ -631,6 +632,10 @@ start_systemd() {
   if [ -n "${XDG_DATA_HOME:-}" ]; then
     set -- "$@" "--setenv=XDG_DATA_HOME=$XDG_DATA_HOME"
   fi
+  set -- "$@" "--setenv=PATH=$PATH"
+  if [ -n "${CODEX_HOME:-}" ]; then
+    set -- "$@" "--setenv=CODEX_HOME=$CODEX_HOME"
+  fi
 
   if ! systemd-run --user --unit="$SYSTEMD_UNIT" --collect \
     --property=Restart=on-failure --property=RestartSec=5 \
@@ -665,6 +670,10 @@ write_launchd_plist() {
   if [ -n "${GENESIS_DATA_DIR:-}" ]; then
     _data_env="    <key>GENESIS_DATA_DIR</key><string>$(xml_escape "$(data_dir)")</string>"
   fi
+  _codex_env=""
+  if [ -n "${CODEX_HOME:-}" ]; then
+    _codex_env="    <key>CODEX_HOME</key><string>$(xml_escape "$CODEX_HOME")</string>"
+  fi
 
   cat >"$_plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -681,8 +690,10 @@ write_launchd_plist() {
   <dict>
     <key>PHX_IP</key><string>$(xml_escape "$_ip")</string>
     <key>PORT</key><string>$_port</string>
+    <key>PATH</key><string>$(xml_escape "$PATH")</string>
 $_host_env
 $_data_env
+$_codex_env
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>

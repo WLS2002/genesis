@@ -712,6 +712,7 @@ case "\${1:-}" in
       *com.genesis.server)
         if [ -e "$RSTATE/launchd-loaded" ]; then exit 0; fi
         ;;
+      gui/1000) exit 0 ;;
     esac
     exit 1
     ;;
@@ -1084,7 +1085,7 @@ SAVED_HOME=$HOME
 reset_remote
 export HOME="$TMP/home"
 expect_status 0 "remote start (launchd)" \
-  "$GENESIS" remote start --node "$RMOTE_NODE" --cookie cook123 --dist-port 9104 --wait 5
+  env CODEX_HOME="$TMP/Codex & Profile" "$GENESIS" remote start --node "$RMOTE_NODE" --cookie cook123 --dist-port 9104 --wait 5
 [ "$(tail -n 1 "$TMP/out")" = "running node=$RMOTE_NODE dist_port=9104" ] ||
   fail "the launchd backend must reach the canonical line, got: $(cat "$TMP/out")"
 PLIST="$TMP/home/Library/LaunchAgents/com.genesis.server.plist"
@@ -1097,6 +1098,8 @@ contains "$plist" "<string>$RELEASE/bin/genesis_server</string>" \
 contains "$plist" "<key>GENESIS_DATA_DIR</key><string>$RDATA</string>" \
   "the instance must share this CLI's data dir"
 contains "$plist" "<key>RunAtLoad</key><true/>" "the plist must RunAtLoad"
+contains "$plist" "<key>PATH</key>" "launchd must retain the invoking development tool PATH"
+contains "$plist" "Codex &amp; Profile" "launchd must retain and XML-escape the chosen vendor login directory"
 grep -q '^bootstrap gui/1000 ' "$RLOG/launchctl.log" ||
   fail "the plist must be bootstrapped into gui/<uid>: $(cat "$RLOG/launchctl.log")"
 expect_status 0 "remote status (launchd)" "$GENESIS" remote status

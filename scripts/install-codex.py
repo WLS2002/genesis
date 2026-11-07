@@ -72,7 +72,7 @@ def rpc(url, token, method, params=None):
 
 def verify_server(url, token):
     initialized = rpc(url, token, "initialize", {"protocolVersion": "2025-11-25", "capabilities": {},
-                                               "clientInfo": {"name": "genesis-installer", "version": "0.4.0"}})
+                                               "clientInfo": {"name": "genesis-installer", "version": "0.5.0"}})
     if initialized.get("result", {}).get("serverInfo", {}).get("name") != "genesis":
         raise ValueError("This endpoint is not a Genesis MCP server. Install a Genesis release containing MCP support.")
     rpc(url, token, "notifications/initialized")
@@ -87,7 +87,8 @@ def write_private_json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     # Create without a world-readable window, including when replacing a file.
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    os.fchmod(fd, 0o600)
+    if getattr(os, "fchmod", None):
+        os.fchmod(fd, 0o600)
     with os.fdopen(fd, "w") as stream:
         json.dump(value, stream, indent=2)
         stream.write("\n")

@@ -10,7 +10,7 @@ Genesis runs its own configured models and keeps tasks in its existing task hist
 
 ## Install
 
-Give Codex the repository URL and ask it to **install Genesis for Codex following [INSTALL.md](../INSTALL.md)**. That guide starts with a cold environment, covers prerequisite detection and model login, and tells the agent to perform the local work. Use the user-selected repository and ref. For the MCP preview, follow its [pinned Linux x64 binary instructions](../INSTALL.md#mcp-preview-installation); older upstream releases lack these tools.
+Give Codex the repository URL and ask it to **install Genesis for Codex following [INSTALL.md](../INSTALL.md)**. That guide starts with a cold environment, covers prerequisite detection and model login, and tells the agent to perform the local work. Use the user-selected repository and ref. For the MCP preview, follow its [pinned native binary instructions](../INSTALL.md#mcp-preview-installation); older upstream releases lack these tools.
 
 The first validated setup is **Linux with Codex CLI 0.167.0**. The connector requires `codex plugin` support and Python 3.9+. Source builds use **Elixir 1.20.4 and Erlang/OTP 29**, matching this repository's build environment.
 
@@ -70,3 +70,11 @@ To uninstall the connector, run `codex plugin remove genesis@genesis-mcp-local` 
 ## Shared workflow
 
 Use the same [task and result workflow](agent-mcp.md#tasks-and-results), [long-task guidance](agent-mcp.md#following-long-tasks) and [caller/engine handoff](../plugins/genesis/skills/genesis/references/overview.md) as other hosts. Codex-specific approval and plugin loading follow its host policy.
+
+## Native platforms and WSL
+
+The [installation entry](../INSTALL.md#mcp-preview-installation) contains the common pinned release and platform commands. Linux/macOS use the existing service CLI. Windows x64 uses the existing desktop host's `--headless` mode in a portable package; `runtime_process` in setup JSON reports the PID and log of a newly started host. To stop that native host, cancel active tasks first and stop its reported process through PowerShell; its lifetime connection shuts down the backend. It is a background login process, not an automatically registered Windows service.
+
+When using a custom port on native Windows, retain the returned MCP URL and pass it with `--url` on later setup/repair runs. For a source-built native desktop host, pass `--server-command <path-to-genesis-desktop.exe>`. Model/token files use the actual `%APPDATA%` directory reported by the service, and private files inherit the user's NTFS directory permissions.
+
+Inside WSL, use the Linux workflow for both Codex and Genesis. A native Windows Codex configuration, Windows model login or `C:\...` project path is not a Linux-side configuration. Keep projects and vendor login in the selected environment; the shared MCP endpoint remains local-only.

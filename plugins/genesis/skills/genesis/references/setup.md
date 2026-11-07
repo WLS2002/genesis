@@ -8,7 +8,7 @@ If this installation includes `installation.json` beside this file, read its `so
 
 ## Prepare the common service
 
-Inspect the environment and existing Genesis address before installing another instance. A compatible existing service can be reused. For binary installation use the checkout's `scripts/install.sh`; for a source build follow its README/INSTALL toolchain instructions and build `genesis_server`. Start through the existing `genesis` lifecycle launcher. Default headless address: `http://127.0.0.1:9999`.
+Inspect the environment and existing Genesis address before installing another instance. A compatible existing service can be reused. For binary installation use the checkout's `scripts/install.sh`; for a source build follow its README/INSTALL toolchain instructions and build `genesis_server`. On Linux/macOS start through the existing `genesis` lifecycle launcher. Native Windows uses the portable desktop host with `--headless`, as described in the checkout’s INSTALL.md; its GUI stays closed. In WSL run both caller and service inside the Linux distribution. Default headless address: `http://127.0.0.1:9999`.
 
 The selected release must provide the nine Genesis tools, including `genesis_reload_config`. Resolve an incompatible running instance explicitly; do not silently replace it or create a second service against the same data. Source-development/desktop instances may use another address; use their displayed URL.
 

@@ -14,6 +14,12 @@ SPEC.loader.exec_module(installer)
 
 
 class InstallerTests(unittest.TestCase):
+    def test_private_manifest_can_be_written_without_posix_fchmod(self):
+        with tempfile.TemporaryDirectory() as root, patch.object(installer.os, "fchmod", None, create=True):
+            path = Path(root) / "private/manifest.json"
+            installer.write_private_json(path, {"test": "value"})
+            self.assertEqual(json.loads(path.read_text()), {"test": "value"})
+
     def test_only_local_http_endpoint_is_accepted(self):
         for url in ["http://example.com/mcp", "http://127.0.0.1:9999/mcp?token=x", "http://u:p@localhost/mcp", "file:///tmp/mcp", "http://127.0.0.1/api"]:
             with self.subTest(url=url), self.assertRaises(ValueError):
@@ -29,7 +35,8 @@ class InstallerTests(unittest.TestCase):
             second = installer.ensure_token(config)
             self.assertEqual(first, second)
             self.assertGreaterEqual(len(first), 32)
-            self.assertEqual((config / "mcp-token").stat().st_mode & 0o777, 0o600)
+            if os.name != "nt":
+                self.assertEqual((config / "mcp-token").stat().st_mode & 0o777, 0o600)
             self.assertEqual(model.read_text(), "existing model config")
 
     def test_private_plugin_contains_persistent_connection_and_skill(self):
@@ -42,7 +49,8 @@ class InstallerTests(unittest.TestCase):
             mcp = json.loads((plugin / ".mcp.json").read_text())
             self.assertEqual(mcp["mcpServers"]["genesis"]["http_headers"]["Authorization"], "Bearer " + token)
             self.assertEqual(mcp["mcpServers"]["genesis"]["url"], "http://localhost:9999/mcp")
-            self.assertEqual((plugin / ".mcp.json").stat().st_mode & 0o777, 0o600)
+            if os.name != "nt":
+                self.assertEqual((plugin / ".mcp.json").stat().st_mode & 0o777, 0o600)
             self.assertTrue((plugin / "skills" / "genesis" / "SKILL.md").is_file())
             manifest = json.loads((marketplace / ".agents/plugins/marketplace.json").read_text())
             self.assertEqual(manifest["plugins"][0]["source"]["path"], "./plugins/genesis")

@@ -17,6 +17,10 @@ ROOT = Path(__file__).resolve().parents[1]
 _spec = importlib.util.spec_from_file_location("genesis_connector", ROOT / "scripts/install-codex.py")
 connector = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(connector)
+_windows_spec = importlib.util.spec_from_file_location("genesis_windows", ROOT / "scripts/install-windows.py")
+windows = importlib.util.module_from_spec(_windows_spec)
+_windows_spec.loader.exec_module(windows)
+IS_WINDOWS = sys.platform == "win32"
 
 
 class SetupError(Exception):
@@ -32,6 +36,8 @@ def run(command, env=None):
 
 
 def source_launcher():
+    if IS_WINDOWS:
+        raise SetupError("source_toolchain_required", "For native Windows use the portable MCP release, or build the existing desktop host and pass its executable with --server-command. WSL uses the Linux source/release path.")
     if not shutil.which("mix") or not shutil.which("elixir"):
         raise SetupError("source_toolchain_required", "Source builds need Elixir >=1.20.4 and Erlang/OTP29, plus Git. Prepare that toolchain or use an MCP-capable binary release.")
     version = subprocess.run(["elixir", "--version"], capture_output=True, text=True, check=True).stdout
@@ -49,6 +55,16 @@ def source_launcher():
 def choose_launcher(args):
     if args.server_command:
         command = Path(args.server_command).expanduser().resolve()
+    elif IS_WINDOWS:
+        if args.method == "source":
+            return source_launcher()
+        installed = shutil.which("genesis-desktop")
+        if args.method == "auto" and installed:
+            command = Path(installed)
+        elif args.method == "auto" and (args.release_dir / "genesis-desktop.exe").is_file():
+            command = args.release_dir / "genesis-desktop.exe"
+        else:
+            command = windows.install(args.release_dir)
     elif args.method == "source":
         command = source_launcher()
     elif args.method == "auto" and shutil.which("genesis"):
@@ -83,6 +99,8 @@ def verify(url, token):
 def selected_url(args):
     if args.url:
         return connector.validate_url(args.url)
+    if IS_WINDOWS:
+        return "http://127.0.0.1:9999/mcp"
     command = str(Path(args.server_command).expanduser().resolve()) if args.server_command else shutil.which("genesis")
     if not command and (args.release_dir.expanduser() / "bin/genesis").is_file():
         command = str(args.release_dir.expanduser() / "bin/genesis")
@@ -108,6 +126,7 @@ def setup(args):
     args.release_dir = args.release_dir.expanduser().resolve()
     token = connector.ensure_token(args.config_dir)
     started = False
+    runtime_process = None
     try:
         status = verify(url, token)
     except URLError as error:
@@ -124,7 +143,10 @@ def setup(args):
         # Keep setup non-interactive; do not change login/session service policy.
         service_env.setdefault("GENESIS_LINGER", "no")
         address = urlsplit(url)
-        run([command, "start", "--ip", "127.0.0.1" if address.hostname == "localhost" else address.hostname, "--port", str(address.port or 80), "--no-linger"], service_env)
+        if IS_WINDOWS:
+            runtime_process = windows.start(command, url, args.config_dir, service_env)
+        else:
+            run([command, "start", "--ip", "127.0.0.1" if address.hostname == "localhost" else address.hostname, "--port", str(address.port or 80), "--no-linger"], service_env)
         started = True
         deadline = time.monotonic() + 30
         while True:
@@ -142,6 +164,7 @@ def setup(args):
     return {
         "status": "ready" if ready else "needs_model_configuration",
         "service_started": started, "plugin_installed": True,
+        "runtime_process": runtime_process,
         "configuration_ready": ready, "provider_connection_tested": False,
         "mcp_url": url, "dashboard_url": origin, "settings_url": origin + "/settings",
         "config_files": status.get("config_files", {}),
@@ -158,9 +181,9 @@ def main(argv=None):
     parser.add_argument("--url", help="Local MCP URL; otherwise use the lifecycle launcher saved URL, then http://127.0.0.1:9999/mcp")
     parser.add_argument("--config-dir", type=Path, default=connector.default_config_dir())
     parser.add_argument("--codex-home", type=Path)
-    parser.add_argument("--server-command", help="Path to an existing Genesis lifecycle launcher (bin/genesis)")
+    parser.add_argument("--server-command", help="Path to bin/genesis, or the native Windows genesis-desktop.exe host")
     parser.add_argument("--method", choices=["auto", "source", "release"], default="auto")
-    parser.add_argument("--release-dir", type=Path, default=Path.home()/".local/share/genesis/server")
+    parser.add_argument("--release-dir", type=Path, default=windows.default_install_dir() if IS_WINDOWS else Path.home()/".local/share/genesis/server")
     parser.add_argument("--json", action="store_true", help="Print structured status; progress/commands go to stderr")
     args = parser.parse_args(argv)
     try:

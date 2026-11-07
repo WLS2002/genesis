@@ -10,24 +10,48 @@ This guide is for the agent carrying out that request. Complete the local instal
 
 The MCP preview lives on [`WLS2002/genesis`, branch `feat/mcp-codex`](https://github.com/WLS2002/genesis/tree/feat/mcp-codex). Clone that branch when given its GitHub link; a plain clone of the repository's default branch does not select the preview.
 
-For **Linux x64**, use the matching [MCP preview release](https://github.com/WLS2002/genesis/releases/tag/mcp-preview-0.4.0). It bundles Erlang/Elixir and needs no source toolchain. Prepare Python 3.9+, Git, `curl` or `wget`, and `tar` with xz support. Run from this checkout:
+Use the matching [MCP preview release](https://github.com/WLS2002/genesis/releases/tag/mcp-preview-0.5.0). It includes the runtime, so an Erlang/Elixir source toolchain is unnecessary.
+
+| Environment | Package / preparation |
+| --- | --- |
+| Linux x64 / arm64 | Native server archive; Linux builds target Ubuntu 22.04 or newer (glibc 2.35+). |
+| macOS Apple Silicon / Intel | Native server archive for the actual architecture; macOS 15+. |
+| Windows x64 | Portable host ZIP, running the existing `--headless` mode; no desktop window or GUI installer. |
+| WSL 2 | Use the Linux package inside the distribution; run the coding agent, Genesis and project there. |
+
+Prepare Python 3.9+, Git and the current coding agent. Linux/macOS also need `curl` or `wget`, and `tar` with xz support. Windows uses Python's standard ZIP/download support. Run from this checkout.
+
+**Linux, macOS, or a coding agent running inside WSL:**
 
 ```sh
-export GENESIS_VERSION=mcp-preview-0.4.0
+export GENESIS_VERSION=mcp-preview-0.5.0
 export GENESIS_DOWNLOAD_BASE=https://github.com/WLS2002/genesis/releases/download
 export GENESIS_DOWNLOAD_FALLBACK_BASE=https://github.com/WLS2002/genesis/releases
 python3 scripts/setup-codex.py --method release --json
 ```
 
-For another compatible coding agent, use the same download settings with `sh scripts/install.sh`, start Genesis, then follow the [shared connection contract](docs/agent-mcp.md#connection-contract). The automatic setup command above is the Codex adapter.
+**Native Windows, PowerShell:**
 
-This preview publishes a Linux x64 server, built and tested on Ubuntu 24.04; the binary needs glibc 2.39 or newer. Other platforms or older systems can build this branch from source with the toolchain below; upstream desktop downloads and older upstream server releases do not contain this MCP implementation. Preserve a running installation and its data; resolve a conflicting service explicitly before upgrading or starting a separate instance.
+```powershell
+$env:GENESIS_VERSION = "mcp-preview-0.5.0"
+$env:GENESIS_DOWNLOAD_BASE = "https://github.com/WLS2002/genesis/releases/download"
+$env:GENESIS_DOWNLOAD_FALLBACK_BASE = "https://github.com/WLS2002/genesis/releases"
+python scripts/setup-codex.py --method release --json
+```
+
+The shared setup entry chooses the current platform. Native Windows installs under `%LOCALAPPDATA%\Genesis\server`, reuses Genesis's existing headless desktop host and reports its PID/log path as `runtime_process`. Model/token files live in the backend's `%APPDATA%\genesis`. This starts a background process for the current login, without registering an administrator service. Linux/macOS retain the original `genesis` lifecycle CLI.
+
+For another compatible coding agent, use the same download settings with `sh scripts/install.sh` on Linux/macOS, or `python scripts/install-windows.py` on native Windows. Start the POSIX lifecycle launcher or the installed `genesis-desktop.exe --headless` host (set `PORT=9999` and `EVOGIT_BIND=127.0.0.1`), then follow the [shared connection contract](docs/agent-mcp.md#connection-contract). The automatic setup command above is the Codex adapter.
+
+Keep the calling agent, Genesis, repository and credentials in the same environment. For a native Windows agent use the native Windows package; for WSL run both agent and service inside WSL with Linux project paths. WSL does not translate a native host's MCP registration or vendor login automatically. If WSL is absent, use native Windows or ask the user to complete OS provisioning that requires elevation/restart.
+
+Preserve a running installation and its data; resolve a conflicting service explicitly before upgrading or starting a separate instance. Upstream default branches/older packages do not contain this MCP preview. Source building remains available below for POSIX systems; native Windows source builds use the existing desktop host build and `--server-command`.
 
 ## 1. Locate the requested version and environment
 
 Reuse or clone the repository/ref supplied by the user. Inspect local changes before switching versions. Use the MCP preview branch and matching release above, or build the selected MCP-capable checkout. Public default branches and older releases may not contain this implementation.
 
-Inspect OS, architecture, package manager and available tools. Source builds require Git, Elixir 1.20.4 and Erlang/OTP 29 plus the checkout's native build dependencies; reuse the established toolchain. The existing release installer supports Linux x64/arm64 and macOS arm64. Host integration additionally requires a local HTTP MCP client able to send persistent authorization headers. The validated automatic adapter is currently Linux with Codex CLI 0.167.0.
+Inspect OS, architecture, package manager and available tools. Source builds require Git, Elixir 1.20.4 and Erlang/OTP 29 plus the checkout's native build dependencies; reuse the established toolchain. The preview provides Linux x64/arm64, macOS x64/arm64 and native Windows x64 packages. Host integration additionally requires a local HTTP MCP client able to send persistent authorization headers. The automatic adapter targets Codex CLI 0.167.0 with plugin support; use the current native platform package.
 
 ## 2. Prepare and start Genesis
 
