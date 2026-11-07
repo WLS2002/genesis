@@ -68,7 +68,7 @@ with tempfile.TemporaryDirectory(prefix="Genesis smoke 测试 ") as temporary:
         (config / "config.toml").write_text('[[llm.models]]\nid = "offline"\nmodel = "openai:offline-fixture"\n', encoding="utf-8")
         (config / "credentials.toml").write_text('OPENAI_API_KEY = "offline-fixture"\n', encoding="utf-8")
         loaded = connector.rpc(url, token, "tools/call", {"name": "genesis_reload_config", "arguments": {}})["result"]
-        assert not loaded["isError"] and loaded["structuredContent"]["model_ready"]
+        assert not loaded["isError"] and loaded["structuredContent"]["model_ready"], loaded
         assert loaded["structuredContent"]["configuration_reloaded"]
         models = connector.rpc(url, token, "tools/call", {"name": "genesis_list_models", "arguments": {}})["result"]
         assert models["structuredContent"]["models"][0]["id"] == "offline"
@@ -76,6 +76,10 @@ with tempfile.TemporaryDirectory(prefix="Genesis smoke 测试 ") as temporary:
             "codex_plugin_registration": True, "tools": 9, "file_configuration_reload": True,
             "provider_connection_tested": False}))
     finally:
+        if sys.exc_info()[0] is not None:
+            for log in [trial / "data/server.log", config / "server.log"]:
+                if log.exists():
+                    print(log.read_text(encoding="utf-8", errors="replace")[-10000:])
         if os.name == "nt":
             if result and result.get("runtime_process"):
                 # Kill only the existing Rust host; its lifetime pipe closes the BEAM.
