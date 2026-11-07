@@ -174,6 +174,13 @@ defmodule EvoGit.AgentScheduler do
   """
   @spec update_config(keyword()) :: :ok | {:error, String.t()}
   def update_config(opts) when is_list(opts) do
+    # A fresh install has no models to warm at boot. Keep the first catalog
+    # decode (and its transient heap) outside the scheduler on profile changes.
+    case Keyword.get(opts, :model_profiles) do
+      profiles when is_list(profiles) -> EvoGit.CatalogWarmup.warm_up(profiles)
+      _ -> :ok
+    end
+
     GenServer.call(__MODULE__, {:update_config, opts})
   end
 

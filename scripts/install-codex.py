@@ -61,7 +61,9 @@ def rpc(url, token, method, params=None):
     req = Request(url, body, headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream",
                                      "Authorization": "Bearer " + token, "MCP-Protocol-Version": "2025-11-25"})
     # Never send this local credential through a proxy or HTTP redirect.
-    with build_opener(ProxyHandler({}), NoRedirect()).open(req, timeout=15) as response:
+    # Profile reload may warm the local catalog (30s bound) before the 5s
+    # scheduler call; the client must allow that operation to finish.
+    with build_opener(ProxyHandler({}), NoRedirect()).open(req, timeout=40) as response:
         if response.status == 202:
             return {}
         result = json.load(response)
