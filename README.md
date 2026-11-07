@@ -27,6 +27,12 @@ https://github.com/user-attachments/assets/d7f3d520-e39f-45cd-a525-77e5e8d00a75
   <a href="https://genesis.evox.group/#film">Watch the film on the website →</a>
 </p>
 
+## Use from your coding agent
+
+Give your agent this repository URL and ask it to **install Genesis and connect it to your coding agent**. Start with [installation](INSTALL.md), then use the [shared MCP tools and collaboration workflow](docs/agent-mcp.md).
+
+Genesis handles background development with its own configured models; the calling agent supplies context, follows progress and checks results. [Codex](docs/codex-mcp.md) currently has the validated automatic adapter. Other compatible MCP hosts use the same service and workflow with their own connection and instruction-loading mechanisms. For this MCP preview, use branch `feat/mcp-codex` and the matching Linux x64 release described in [INSTALL.md](INSTALL.md#mcp-preview-installation).
+
 ## See development unfold
 
 - **Set an objective.** Start a new project or bring an existing repository. Describe the outcome and constraints; Genesis decomposes the work as needed.

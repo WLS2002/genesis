@@ -846,7 +846,7 @@ ok "remote start requires --node and --cookie (exit 2)"
 # then distribution is enabled on it at runtime.
 reset_remote
 expect_status 0 "remote start (user scope)" \
-  "$GENESIS" remote start --node "$RMOTE_NODE" --cookie cook123 --dist-port 9101 --wait 5
+  env XDG_CONFIG_HOME="$TMP/config with spaces" XDG_DATA_HOME="$TMP/data with spaces" "$GENESIS" remote start --node "$RMOTE_NODE" --cookie cook123 --dist-port 9101 --wait 5
 out=$(cat "$TMP/out")
 contains "$out" "Genesis server starting (systemd backend)." \
   "a cold host must start the shared instance first"
@@ -861,6 +861,8 @@ not_contains "$runlog" "--system" "a non-root host must not use the system scope
 contains "$runlog" "--unit=genesis-server" "the ONE server unit must be started"
 not_contains "$runlog" "--unit=genesis-remote" "no per-target daemon unit may ever be created"
 not_contains "$runlog" "RELEASE_NODE" "distribution must not be baked into the instance launch"
+contains "$runlog" "--setenv=XDG_CONFIG_HOME=$TMP/config with spaces" "systemd must preserve the selected Genesis model/token config directory"
+contains "$runlog" "--setenv=XDG_DATA_HOME=$TMP/data with spaces" "systemd must preserve the selected runtime data directory"
 contains "$runlog" "--setenv=GENESIS_DATA_DIR=$RDATA" "the instance must share this CLI's data dir"
 contains "$runlog" "--setenv=PHX_IP=127.0.0.1" "the instance must receive the bind address"
 contains "$runlog" "--property=Restart=on-failure" "a crashed instance must be restarted"

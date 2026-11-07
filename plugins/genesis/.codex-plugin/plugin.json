@@ -1,0 +1,12 @@
+{
+  "name": "genesis",
+  "version": "0.4.0",
+  "description": "Delegate development to a local Genesis engine and inspect its tasks through MCP.",
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Genesis",
+    "shortDescription": "Develop with your local Genesis engine",
+    "category": "Coding"
+  }
+}

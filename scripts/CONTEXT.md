@@ -91,3 +91,11 @@ The "instance" those stubs launch is a real background `sh` fixture that answers
 - `../.github/workflows/` → builds and uploads the `genesis_server_*` tarballs and the `install.sh` asset.
 - `../apps/evo_git/lib/evo_git/remote_bootstrap.ex` → Elixir mirror of the same `/dl/` asset-URL pattern (`direct_url/1`).
 - The Mix umbrella build (`../apps/`, `../mix.exs`) does not include this directory.
+
+## Codex MCP integration
+
+`install-codex.py` connects an already-running MCP-capable local Genesis service to Codex: validates the endpoint, preserves the token/model config, renders a private local plugin and installs it via Codex CLI. `test-install-codex.py` exercises connector behavior. Public instructions live in `docs/codex-mcp.md`; the credential-free plugin template is `plugins/genesis/`.
+
+## Agent onboarding
+
+`setup-codex.py` is the end-to-end Codex setup entry: discover/reuse the local lifecycle URL, prepare source or a compatible release if needed, start through the existing CLI, then call `install-codex.py`’s shared `connect()` implementation. Exit0 is configuration-ready, exit2 is installed but needs model choice/login, exit1 is an actionable setup error. JSON stdout stays machine-readable; command logs use stderr. Root `INSTALL.md` guides a caller before plugin installation; the installed Skill bundles overview/setup references and private `installation.json` source provenance. `test-setup-codex.py` exercises cold start/reuse/model-needed/incompatibility/saved URL with process fixtures. Lifecycle systemd startup forwards explicit XDG config/data paths; the CLI harness covers that contract.

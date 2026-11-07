@@ -1,0 +1,186 @@
+#!/usr/bin/env python3
+"""Prepare/reuse Genesis, start it, connect Codex, and report remaining setup work."""
+import argparse
+import importlib.util
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+import time
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
+
+ROOT = Path(__file__).resolve().parents[1]
+_spec = importlib.util.spec_from_file_location("genesis_connector", ROOT / "scripts/install-codex.py")
+connector = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(connector)
+
+
+class SetupError(Exception):
+    def __init__(self, code, message):
+        self.code, self.message = code, message
+        super().__init__(message)
+
+
+def run(command, env=None):
+    print("Running: " + " ".join(map(str, command)), file=sys.stderr, flush=True)
+    subprocess.run(list(map(str, command)), cwd=ROOT, env=env, check=True,
+                   stdout=sys.stderr, stderr=sys.stderr)
+
+
+def source_launcher():
+    if not shutil.which("mix") or not shutil.which("elixir"):
+        raise SetupError("source_toolchain_required", "Source builds need Elixir >=1.20.4 and Erlang/OTP29, plus Git. Prepare that toolchain or use an MCP-capable binary release.")
+    version = subprocess.run(["elixir", "--version"], capture_output=True, text=True, check=True).stdout
+    match = re.search(r"Elixir (\d+)\.(\d+)\.(\d+)", version)
+    if not match or tuple(map(int, match.groups())) < (1, 20, 4) or "Erlang/OTP 29" not in version:
+        raise SetupError("source_toolchain_required", "This checkout requires Elixir >=1.20.4 and Erlang/OTP29; see README Run from source.")
+    if not shutil.which("git"):
+        raise SetupError("git_required", "Install Git before building Genesis.")
+    build_env = {**os.environ, "MIX_ENV": "prod"}
+    for command in [["mix", "deps.get"], ["mix", "assets.deploy"], ["mix", "release", "genesis_server", "--overwrite"]]:
+        run(command, build_env)
+    return ROOT / "_build/prod/rel/genesis_server/bin/genesis"
+
+
+def choose_launcher(args):
+    if args.server_command:
+        command = Path(args.server_command).expanduser().resolve()
+    elif args.method == "source":
+        command = source_launcher()
+    elif args.method == "auto" and shutil.which("genesis"):
+        command = Path(shutil.which("genesis"))
+    elif args.method == "auto" and (args.release_dir / "bin/genesis").is_file():
+        command = args.release_dir / "bin/genesis"
+    elif args.method == "auto" and (ROOT / "_build/prod/rel/genesis_server/bin/genesis").is_file():
+        command = ROOT / "_build/prod/rel/genesis_server/bin/genesis"
+    elif args.method == "auto" and shutil.which("mix") and shutil.which("elixir"):
+        command = source_launcher()
+    else:
+        run(["sh", ROOT / "scripts/install.sh", "--dir", args.release_dir])
+        command = args.release_dir / "bin/genesis"
+    if not command.is_file() or not os.access(command, os.X_OK):
+        raise SetupError("launcher_missing", "Genesis lifecycle launcher is missing or not executable: " + str(command))
+    return command
+
+
+def refused(error):
+    return isinstance(error, URLError) and isinstance(error.reason, ConnectionRefusedError)
+
+
+def verify(url, token):
+    try:
+        return connector.verify_server(url, token)
+    except HTTPError as error:
+        raise SetupError("incompatible_service", f"The service at {url} returned HTTP {error.code}. Check the URL/config directory or update the running release to one containing MCP support. It has not been restarted or replaced.") from error
+    except ValueError as error:
+        raise SetupError("incompatible_service", str(error)) from error
+
+
+def selected_url(args):
+    if args.url:
+        return connector.validate_url(args.url)
+    command = str(Path(args.server_command).expanduser().resolve()) if args.server_command else shutil.which("genesis")
+    if not command and (args.release_dir.expanduser() / "bin/genesis").is_file():
+        command = str(args.release_dir.expanduser() / "bin/genesis")
+    if not command:
+        built = ROOT / "_build/prod/rel/genesis_server/bin/genesis"
+        if built.is_file():
+            command = str(built)
+    if command:
+        saved = subprocess.run([str(command), "url"], capture_output=True, text=True, timeout=10)
+        if saved.returncode == 0:
+            try:
+                return connector.validate_url(saved.stdout.strip().rstrip("/") + "/mcp")
+            except ValueError:
+                pass
+    return "http://127.0.0.1:9999/mcp"
+
+
+def setup(args):
+    url = selected_url(args)
+    if not shutil.which("codex"):
+        raise SetupError("codex_required", "Install Codex CLI with plugin support before connecting Genesis.")
+    args.config_dir = args.config_dir.expanduser().resolve()
+    args.release_dir = args.release_dir.expanduser().resolve()
+    token = connector.ensure_token(args.config_dir)
+    started = False
+    try:
+        status = verify(url, token)
+    except URLError as error:
+        if not refused(error):
+            raise SetupError("connection_failed", "Cannot connect to the local Genesis endpoint: " + str(error.reason)) from error
+        command = choose_launcher(args)
+        service_env = dict(os.environ)
+        if sys.platform.startswith("linux"):
+            if args.config_dir.name != "genesis":
+                raise SetupError("config_directory", "For automatic Linux startup, --config-dir must end in /genesis (XDG_CONFIG_HOME is its parent).")
+            service_env["XDG_CONFIG_HOME"] = str(args.config_dir.parent)
+        elif args.config_dir != connector.default_config_dir().resolve():
+            raise SetupError("config_directory", "Automatic startup on this platform uses the default Genesis configuration directory.")
+        # Keep setup non-interactive; do not change login/session service policy.
+        service_env.setdefault("GENESIS_LINGER", "no")
+        address = urlsplit(url)
+        run([command, "start", "--ip", "127.0.0.1" if address.hostname == "localhost" else address.hostname, "--port", str(address.port or 80), "--no-linger"], service_env)
+        started = True
+        deadline = time.monotonic() + 30
+        while True:
+            try:
+                status = verify(url, token)
+                break
+            except URLError as error:
+                if not refused(error) or time.monotonic() >= deadline:
+                    raise SetupError("service_not_ready", "Genesis did not expose MCP at the requested address. Check its status/logs and the actual port; setup will not restart another instance.") from error
+                time.sleep(.25)
+    # Reuse the connector for all plugin packaging and registration decisions.
+    status = connector.connect(url, args.config_dir, args.codex_home, output=sys.stderr)
+    origin = url.rsplit("/mcp", 1)[0]
+    ready = bool(status.get("model_ready"))
+    return {
+        "status": "ready" if ready else "needs_model_configuration",
+        "service_started": started, "plugin_installed": True,
+        "configuration_ready": ready, "provider_connection_tested": False,
+        "mcp_url": url, "dashboard_url": origin, "settings_url": origin + "/settings",
+        "config_files": status.get("config_files", {}),
+        "source_root": str(ROOT), "warnings": status.get("warnings", []),
+        "next_steps": (["Open a new Codex session, run genesis_check and genesis_list_models, then ask to use Genesis for development."] if ready else
+                       ["Follow the installed Skill's references/configuration.md: ask for the missing provider/model and authentication choice, and preserve existing configuration.",
+                        "Use config_files from this result. Prepare non-secret model configuration; let the user fill credentials locally or complete vendor CLI login on the Genesis host.",
+                        "In a session with the tools loaded, call genesis_reload_config to apply file edits, then genesis_check and genesis_list_models. No Genesis dashboard interaction is required."])
+    }
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--url", help="Local MCP URL; otherwise use the lifecycle launcher saved URL, then http://127.0.0.1:9999/mcp")
+    parser.add_argument("--config-dir", type=Path, default=connector.default_config_dir())
+    parser.add_argument("--codex-home", type=Path)
+    parser.add_argument("--server-command", help="Path to an existing Genesis lifecycle launcher (bin/genesis)")
+    parser.add_argument("--method", choices=["auto", "source", "release"], default="auto")
+    parser.add_argument("--release-dir", type=Path, default=Path.home()/".local/share/genesis/server")
+    parser.add_argument("--json", action="store_true", help="Print structured status; progress/commands go to stderr")
+    args = parser.parse_args(argv)
+    try:
+        result = setup(args)
+        code = 0 if result["configuration_ready"] else 2
+    except (SetupError, OSError, ValueError, URLError, subprocess.SubprocessError) as error:
+        result = {"status": "error", "code": getattr(error, "code", "setup_failed"), "message": str(error)}
+        code = 1
+    if args.json:
+        print(json.dumps(result, indent=2))
+    else:
+        print("Genesis setup: " + result["status"])
+        if "message" in result:
+            print(result["message"])
+        else:
+            print("Dashboard: " + result["dashboard_url"])
+            for step in result["next_steps"]:
+                print("- " + step)
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

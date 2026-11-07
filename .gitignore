@@ -52,3 +52,6 @@ evo_git-*.tar
 
 # Tauri bundled Elixir release (copied by desktop build)
 /desktop/src-tauri/resources/genesis-backend/
+
+# Python tooling caches.
+__pycache__/
