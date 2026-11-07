@@ -29,7 +29,7 @@ class WindowsInstallTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root, patch.object(windows, "download", side_effect=[checksum, body]):
             dest = Path(root) / "Genesis 测试 runtime"
             launcher = windows.install(dest)
-            self.assertEqual(launcher, dest / "genesis-desktop.exe")
+            self.assertEqual(launcher, (dest / "genesis-desktop.exe").resolve())
             self.assertEqual(launcher.read_text(), "fixture launcher")
 
     def test_bad_checksum_keeps_existing_runtime(self):
