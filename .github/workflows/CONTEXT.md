@@ -1,5 +1,11 @@
 # `.github/workflows/` — CI/CD Pipelines
 
+## MCP preview builds
+
+`mcp-preview.yml` is separate from desktop stable releases. Controlled `mcp-preview-build-*` tags build Linux x64/arm64, macOS x64/arm64 and the native Windows headless portable host. It reuses setup-mix, the established vendor versions/layouts and the existing desktop Rust host; native smoke installs each package and registers the actual Codex CLI before uploading artifacts.
+
+`mcp-publish.yml` consumes a completed source run identified by `mcp-preview-publish-<run-id>`. It requires all five native jobs to succeed in this repository's preview workflow, downloads their artifacts inside GitHub, checks the full asset/checksum set and build-info revisions, and uploads into a draft before publishing. Publication is serialized and a published tag is never overwritten. Version, installer scripts and the release tag come from the verified source SHA; the publisher's own revision may be later. Stable release workflows and default branches are unchanged.
+
 ## Intent
 
 CI/CD workflow definitions for the Genesis project: a lightweight CI gate on PRs/pushes to `main`, a comprehensive release build triggered by tag pushes (`v*`) that produces desktop installers and headless distributions, and a bounded README Evidence update workflow.

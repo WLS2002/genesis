@@ -1,0 +1,83 @@
+name: Publish verified MCP preview
+
+on:
+  push:
+    tags: ['mcp-preview-publish-*']
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: genesis-mcp-preview-publication
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-22.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Require the five successful native jobs
+        id: source
+        run: |
+          set -euo pipefail
+          SOURCE_RUN_ID="${GITHUB_REF_NAME#mcp-preview-publish-}"
+          [[ "$SOURCE_RUN_ID" =~ ^[0-9]+$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID" > source-run.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/jobs" > source-jobs.json
+          python3 - <<'PY'
+          import json, os
+          run=json.load(open('source-run.json'))
+          assert run['conclusion']=='success'
+          assert run['head_repository']['full_name']==os.environ['GITHUB_REPOSITORY']
+          assert run['path']=='.github/workflows/mcp-preview.yml'
+          expected={'linux_x64','linux_arm64','darwin_x64','darwin_arm64','windows_x64'}
+          jobs=json.load(open('source-jobs.json'))['jobs']
+          assert expected=={j['name'] for j in jobs if j['conclusion']=='success'}
+          PY
+          echo "run-id=$SOURCE_RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "source-sha=$(python3 -c "import json; print(json.load(open('source-run.json'))['head_sha'])")" >> "$GITHUB_OUTPUT"
+      - name: Read version and installers from the verified source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ steps.source.outputs.source-sha }}
+          path: verified-source
+      - name: Collect verified packages within GitHub
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          run-id: ${{ steps.source.outputs.run-id }}
+          github-token: ${{ github.token }}
+          pattern: mcp-preview-*
+          merge-multiple: true
+          path: dist/
+      - name: Check the complete asset set
+        run: |
+          python3 - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          names=['genesis_server_'+p+'.tar.xz' for p in ['linux_x64','linux_arm64','darwin_x64','darwin_arm64']]
+          names+=['genesis_desktop_windows_x64.zip']
+          for name in names:
+              p=Path('dist')/name
+              expected=p.with_name(name+'.sha256').read_text().split()[0]
+              assert hashlib.sha256(p.read_bytes()).hexdigest()==expected, name
+          revision=json.load(open('source-run.json'))['head_sha']
+          for platform in ['linux_x64','linux_arm64','darwin_x64','darwin_arm64','windows_x64']:
+              info=json.load(open('dist/build-info-'+platform+'.json'))
+              assert info['revision']==revision, platform
+              assert info['sha256']==hashlib.sha256((Path('dist')/info['asset']).read_bytes()).hexdigest()
+          PY
+      - name: Publish the complete preview
+        run: |
+          set -euo pipefail
+          PREVIEW_VERSION="$(python3 -c "import json; print(json.load(open('verified-source/plugins/genesis/.codex-plugin/plugin.json'))['version'])")"
+          RELEASE_TAG="mcp-preview-$PREVIEW_VERSION"
+          if gh release view "$RELEASE_TAG" --json isDraft > release-state.json 2>/dev/null; then
+            python3 -c "import json; assert json.load(open('release-state.json'))['isDraft'], 'Published previews are immutable; choose a new version'"
+          else
+            gh release create "$RELEASE_TAG" --draft --prerelease --latest=false --target "${{ steps.source.outputs.source-sha }}" --title "Genesis MCP preview $PREVIEW_VERSION" --notes-file docs/mcp-preview-release.md
+          fi
+          gh release upload "$RELEASE_TAG" dist/* verified-source/scripts/install.sh verified-source/scripts/install-windows.py --clobber
+          gh release edit "$RELEASE_TAG" --draft=false --prerelease --latest=false
