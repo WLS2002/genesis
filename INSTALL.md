@@ -21,7 +21,7 @@ python3 scripts/setup-codex.py --method release --json
 
 For another compatible coding agent, use the same download settings with `sh scripts/install.sh`, start Genesis, then follow the [shared connection contract](docs/agent-mcp.md#connection-contract). The automatic setup command above is the Codex adapter.
 
-This preview publishes a Linux x64 server, built on Ubuntu 22.04. Other platforms can build this branch from source with the toolchain below; upstream desktop downloads and older upstream server releases do not contain this MCP implementation. Preserve a running installation and its data; resolve a conflicting service explicitly before upgrading or starting a separate instance.
+This preview publishes a Linux x64 server, built and tested on Ubuntu 24.04; the binary needs glibc 2.39 or newer. Other platforms or older systems can build this branch from source with the toolchain below; upstream desktop downloads and older upstream server releases do not contain this MCP implementation. Preserve a running installation and its data; resolve a conflicting service explicitly before upgrading or starting a separate instance.
 
 ## 1. Locate the requested version and environment
 
