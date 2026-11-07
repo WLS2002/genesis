@@ -47,7 +47,7 @@ with tempfile.TemporaryDirectory(prefix="Genesis smoke 测试 ") as temporary:
     result = None
     try:
         run = subprocess.run([sys.executable, str(ROOT / "scripts/setup-codex.py"), "--method", "release", "--json",
-            "--url", url, "--release-dir", str(runtime), "--config-dir", str(config)],
+            "--url", url, "--release-dir", str(runtime), "--config-dir", str(config), "--codex-home", str(trial / "codex")],
             env=env, capture_output=True, text=True, encoding="utf-8", timeout=180)
         print(run.stderr)
         print(run.stdout)
