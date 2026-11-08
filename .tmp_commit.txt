@@ -1,0 +1,13 @@
+﻿[evogit-agent-T6-A3 2cd8de7a6] feat(assistant): drive the repo-less assistant through genesis_* task-control tools
+ 3 files changed, 170 insertions(+), 229 deletions(-)
+ create mode 100644 apps/evo_git/test/evo_git/agents/self_reflective_test.exs
+ D .tmp_diag.txt
+ D .tmp_diag2.txt
+ D .tmp_diag3.txt
+ D .tmp_diag4.txt
+ D .tmp_env.txt
+ D .tmp_env2.txt
+ D .tmp_mixver.txt
+ D .tmp_path.txt
+?? .tmp_commit.txt
+2cd8de7a6fdefb51f0404516bea5ae54eb822607

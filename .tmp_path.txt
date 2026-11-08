@@ -1,2 +1,0 @@
-﻿TEMP=C:\Users\cvgcv\AppData\Local\Temp/genesis/task_e72678d2925bede3
-D:\genesis\.genesis\workers\worker_T6_A1\.tmp_path.txt
