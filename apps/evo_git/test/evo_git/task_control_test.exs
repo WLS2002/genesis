@@ -55,12 +55,13 @@ defmodule EvoGit.TaskControlTest do
     assert {:error, %{code: "not_found"}} = TaskControl.get(%{"task_id" => "missing"})
   end
 
-  test "lists only the requested project with bounded pagination" do
-    seed!("a", :completed, "/tmp/a", nil)
-    seed!("b", :completed, "/tmp/b", nil)
+  test "lists only the requested project with bounded pagination", %{tmp_dir: dir} do
+    path = Path.join(dir, "a")
+    seed!("a", :completed, path, nil)
+    seed!("b", :completed, Path.join(dir, "b"), nil)
 
     assert {:ok, %{tasks: [%{id: "a"}], total: 1}} =
-             TaskControl.list(%{"path" => "/tmp/a", "limit" => 1})
+             TaskControl.list(%{"path" => path, "limit" => 1})
 
     assert {:error, %{code: "invalid_arguments"}} = TaskControl.list(%{"limit" => 10000})
   end
