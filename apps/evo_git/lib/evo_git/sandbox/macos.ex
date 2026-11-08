@@ -28,10 +28,9 @@ defmodule EvoGit.Sandbox.MacOS do
   Also enforces a process-count limit (`(limit number N)`, see
   `@max_processes`) and keeps network default-allowed (agents run
   `git fetch/push`, `mix deps.get`, `curl`, and web tools). If the host's
-  `sandbox-exec` rejects the `(limit ...)` syntax (unverifiable without a
-  macOS host), `run/4`/`run_with_partial/6` transparently retry once with
-  the limit stripped and cache the decision — the sandbox keeps working
-  with all other hardening intact.
+  `sandbox-exec` rejects the `(limit ...)` syntax, profile selection probes
+  a harmless command with and without
+  the limit and caches the supported profile. User commands execute once.
   """
 
   @behaviour EvoGit.Sandbox.Behaviour
@@ -46,11 +45,8 @@ defmodule EvoGit.Sandbox.MacOS do
   # compiler ports) while still capping a runaway agent's fork bombs.
   @max_processes 200
 
-  # Cached decision that `sandbox-exec` on THIS macOS rejects the
-  # `(limit ...)` rule (see `strip_process_limit/1` and the retry logic in
-  # `run/4` / `run_with_partial/6`). Once set to `true`, every subsequent
-  # call uses the stripped profile directly, skipping the guaranteed-failing
-  # first attempt.
+  # Foreground and background execution share the result of a harmless
+  # native profile probe. true means the process-count rule is unsupported.
   @process_limit_rejected_key {EvoGit.Sandbox.MacOS, :process_limit_rejected}
 
   # Built-in writable cache dirs (home-relative) for package managers and
@@ -96,9 +92,7 @@ defmodule EvoGit.Sandbox.MacOS do
     if enabled?() do
       resolved_tmpdir = EvoGit.Sandbox.resolve_tmpdir()
 
-      # Once this macOS has been observed rejecting the `(limit ...)` rule,
-      # use the stripped profile directly — no guaranteed-failing first
-      # attempt on every call.
+      # Select a supported profile before running the user's command.
       profile = effective_profile(cwd, repo_root)
 
       {exec, exec_args} =
@@ -122,20 +116,7 @@ defmodule EvoGit.Sandbox.MacOS do
       wrapped_cmd = Helpers.build_shell_command(exec, exec_args) <> " < /dev/null"
 
       # sandbox-exec -p <profile> -- bash -c <wrapped_cmd>
-      result = sandbox_exec(profile, "bash", ["-c", wrapped_cmd], cwd, resolved_tmpdir, git_env)
-
-      # Fail-safe: if sandbox-exec rejects the `(limit ...)` rule (syntax
-      # could not be validated without a macOS host), retry once with the
-      # limit stripped so one bad rule can't break EVERY sandboxed command.
-      maybe_retry_without_process_limit(
-        result,
-        profile,
-        "bash",
-        ["-c", wrapped_cmd],
-        cwd,
-        resolved_tmpdir,
-        git_env
-      )
+      sandbox_exec(profile, "bash", ["-c", wrapped_cmd], cwd, resolved_tmpdir, git_env)
     else
       # Disabled path: wrap in bash with stdin redirect from /dev/null. The
       # managed per-task tmpdir (when installed) is exported as
@@ -155,16 +136,44 @@ defmodule EvoGit.Sandbox.MacOS do
     end
   end
 
-  # Returns the SBPL profile that is actually handed to `sandbox-exec` for
-  # `cwd`: `generate_profile/2`, minus the process-count `(limit ...)` rule
-  # when this macOS has already been observed rejecting it (see the fail-safe
-  # in `run/4`). Shared with `EvoGit.Sandbox.Background`, where a background
-  # job cannot be retried once started — the cached rejection decision is the
-  # only signal available, so the stripped profile must be chosen up front.
+  # Shared by foreground calls and Background: probe with `true` before
+  # starting user work, then reuse the supported profile for this VM.
   @doc false
   def effective_profile(cwd, repo_root \\ nil) do
     profile = generate_profile(cwd, repo_root)
-    if process_limit_rejected?(), do: strip_process_limit(profile), else: profile
+
+    case :persistent_term.get(@process_limit_rejected_key, :unknown) do
+      true -> strip_process_limit(profile)
+      false -> profile
+      :unknown -> probe_profile(profile, cwd)
+    end
+  end
+
+  defp probe_profile(profile, cwd) do
+    tmpdir = EvoGit.Sandbox.resolve_tmpdir()
+
+    case sandbox_exec(profile, "/usr/bin/true", [], cwd, tmpdir, []) do
+      {_, 0} ->
+        :persistent_term.put(@process_limit_rejected_key, false)
+        profile
+
+      _ ->
+        stripped = strip_process_limit(profile)
+
+        case sandbox_exec(stripped, "/usr/bin/true", [], cwd, tmpdir, []) do
+          {_, 0} ->
+            :persistent_term.put(@process_limit_rejected_key, true)
+
+            Logger.warning(
+              "sandbox-exec rejected the (limit ...) rule; running with the process-count limit disabled"
+            )
+
+            stripped
+
+          _ ->
+            profile
+        end
+    end
   end
 
   # Generate an SBPL (Sandbox Policy Language) profile.
@@ -268,7 +277,8 @@ defmodule EvoGit.Sandbox.MacOS do
       |> Enum.join("\n    ")
 
     # Tmp paths: read-write — processes create temp files and read them back.
-    tmp_paths = Platform.tmp_paths()
+    # Seatbelt matches the resolved paths behind macOS's /tmp and /var aliases.
+    tmp_paths = Enum.uniq(Platform.tmp_paths() ++ ["/private/tmp", "/private/var/tmp"])
 
     tmp_rules =
       Enum.map_join(tmp_paths, "\n    ", fn path ->
@@ -464,21 +474,13 @@ defmodule EvoGit.Sandbox.MacOS do
     |> String.trim()
   end
 
-  # Removes the `(limit ...)` line from a generated SBPL profile, preserving
-  # the rest verbatim. Used by the fail-safe retry: if `sandbox-exec` on
-  # some macOS rejects the `(limit number N)` syntax, the whole profile
-  # would fail to parse and EVERY sandboxed command would break — stripping
-  # just that line keeps all other hardening intact (the process-count limit
-  # is the only thing lost).
+  # The compatibility probe removes only the process-count rule.
   defp strip_process_limit(profile) do
     profile
     |> String.split("\n")
     |> Enum.reject(&String.starts_with?(String.trim_leading(&1), "(limit "))
     |> Enum.join("\n")
   end
-
-  defp process_limit_rejected?,
-    do: :persistent_term.get(@process_limit_rejected_key, false)
 
   # sandbox-exec -p <profile> -- <exec> <args> (shared by the run/4 and
   # run_with_partial/6 enabled paths).
@@ -488,50 +490,6 @@ defmodule EvoGit.Sandbox.MacOS do
       stderr_to_stdout: true,
       env: [{"TMPDIR", tmpdir} | git_env]
     )
-  end
-
-  # Fail-safe process-limit retry. On macOS where `(limit ...)` IS valid,
-  # the first attempt succeeds and this helper is never reached — zero
-  # overhead on healthy systems. On macOS where it is rejected, the FIRST
-  # sandboxed command pays one extra spawn: the failed attempt is retried
-  # once with the process-count limit stripped; on retry success the
-  # decision is cached in `:persistent_term` (warned about once), so
-  # subsequent calls skip straight to the stripped profile. If the retry
-  # ALSO fails, the command genuinely failed — the retry result is the more
-  # accurate one.
-  defp maybe_retry_without_process_limit(
-         {_output, 0} = result,
-         _profile,
-         _exec,
-         _exec_args,
-         _cwd,
-         _tmpdir,
-         _git_env
-       ) do
-    result
-  end
-
-  defp maybe_retry_without_process_limit(result, profile, exec, exec_args, cwd, tmpdir, git_env) do
-    if process_limit_rejected?() do
-      # Another caller already discovered the rejection (and the profile we
-      # ran was already stripped) — return this attempt's result as-is.
-      result
-    else
-      case sandbox_exec(strip_process_limit(profile), exec, exec_args, cwd, tmpdir, git_env) do
-        {retry_output, 0} ->
-          :persistent_term.put(@process_limit_rejected_key, true)
-
-          Logger.warning(
-            "sandbox-exec rejected the (limit ...) rule on this macOS; " <>
-              "running with the process-count limit disabled"
-          )
-
-          {retry_output, 0}
-
-        retry_result ->
-          retry_result
-      end
-    end
   end
 
   @doc """
@@ -565,13 +523,7 @@ defmodule EvoGit.Sandbox.MacOS do
 
     if enabled?() do
       resolved_tmpdir = EvoGit.Sandbox.resolve_tmpdir()
-      profile = generate_profile(cwd, repo_root)
-
-      # The cached decision (if any) is resolved BEFORE spawning the Task so
-      # a known-rejecting macOS skips the guaranteed-failing first attempt.
-      # The attempt-then-retry dance only happens when no decision is cached
-      # yet — and it runs inside the Task so it stays within the timeout.
-      profile = if process_limit_rejected?(), do: strip_process_limit(profile), else: profile
+      profile = effective_profile(cwd, repo_root)
 
       {exec, exec_args} =
         if Nix.active?() do
@@ -584,17 +536,7 @@ defmodule EvoGit.Sandbox.MacOS do
 
       task =
         Task.async(fn ->
-          result = sandbox_exec(profile, exec, exec_args, cwd, resolved_tmpdir, git_env)
-
-          maybe_retry_without_process_limit(
-            result,
-            profile,
-            exec,
-            exec_args,
-            cwd,
-            resolved_tmpdir,
-            git_env
-          )
+          sandbox_exec(profile, exec, exec_args, cwd, resolved_tmpdir, git_env)
         end)
 
       case Task.yield(task, timeout) || Task.shutdown(task) do

@@ -50,6 +50,37 @@ defmodule EvoGit.TaskProgressTest do
     assert {:ok, ^first} = TaskProgress.publish(id, 1, %{summary: "Starting"}, sequence: 2)
   end
 
+  test "the root can resolve earlier child blockers without losing outcomes", %{id: id} do
+    {:ok, _} =
+      TaskProgress.publish(id, 1, %{summary: "Implementing", blockers: [], remaining: ["Verify"]})
+
+    {:ok, child} =
+      TaskProgress.publish(
+        id,
+        2,
+        %{completed: ["Backend"], blockers: ["Fixture missing"], remaining: ["Fixture"]},
+        parent_id: 1
+      )
+
+    assert "Fixture missing" in child["blockers"]
+    {:ok, still_blocked} = TaskProgress.publish(id, 1, %{summary: "Integrating"})
+    assert "Fixture missing" in still_blocked["blockers"]
+    {:ok, resolved} = TaskProgress.publish(id, 1, %{blockers: [], remaining: ["Verify"]})
+    assert resolved["blockers"] == []
+    assert resolved["remaining"] == ["Verify"]
+    assert "Backend" in resolved["completed"]
+    {:ok, new_blocker} = TaskProgress.publish(id, 2, %{blockers: ["New failure"]}, parent_id: 1)
+    assert "New failure" in new_blocker["blockers"]
+    refute "Fixture" in new_blocker["remaining"]
+  end
+
+  test "a root summary alone does not acknowledge a field it never reported", %{id: id} do
+    {:ok, _} = TaskProgress.publish(id, 1, %{summary: "Plan"})
+    {:ok, _} = TaskProgress.publish(id, 2, %{blockers: ["Need input"]}, parent_id: 1)
+    {:ok, report} = TaskProgress.publish(id, 1, %{summary: "Working"})
+    assert report["blockers"] == ["Need input"]
+  end
+
   test "an unchanged newer report still fences out stale work", %{id: id} do
     {:ok, first} = TaskProgress.publish(id, 1, %{summary: "Ready"}, sequence: 3)
     {:ok, ^first} = TaskProgress.publish(id, 1, %{summary: "Ready"}, sequence: 5)

@@ -106,6 +106,8 @@ defmodule EvoGit.Sandbox.MacOSTest do
 
       assert profile =~ ~s{(allow file-write* (subpath "/tmp"))}
       assert profile =~ ~s{(allow file-write* (subpath "/var/tmp"))}
+      assert profile =~ ~s{(allow file-write* (subpath "/private/tmp"))}
+      assert profile =~ ~s{(allow file-write* (subpath "/private/var/tmp"))}
     end
 
     test "grants file-write to cwd" do
@@ -433,6 +435,28 @@ defmodule EvoGit.Sandbox.MacOSTest do
 
     test "the rejection cache defaults to false" do
       assert :persistent_term.get({EvoGit.Sandbox.MacOS, :process_limit_rejected}, false) == false
+    end
+
+    @tag :tmp_dir
+    @tag skip: Platform.windows?()
+    test "a failed user command is executed once even before capability detection", %{
+      tmp_dir: root
+    } do
+      # This shim models an accepting sandbox launcher; the actual command and
+      # its side effect are real. Native CI separately exercises Apple's sandbox.
+      shim = Path.join(root, "sandbox-exec")
+      File.write!(shim, "#!/bin/sh\nshift 3\nexec \"$@\"\n")
+      File.chmod!(shim, 0o755)
+      original_path = System.get_env("PATH")
+      System.put_env("PATH", root <> ":" <> original_path)
+      on_exit(fn -> System.put_env("PATH", original_path) end)
+      config = Path.join([System.get_env("XDG_CONFIG_HOME"), "genesis", "config.toml"])
+      File.mkdir_p!(Path.dirname(config))
+      File.write!(config, "[sandbox]\nmode = \"enabled\"\n")
+      marker = Path.join(root, "executions")
+      command = "echo ran >> #{EvoGit.Sandbox.Helpers.shell_escape(marker)}; exit 9"
+      assert {_output, 9} = MacOS.run(root, "bash", ["-c", command])
+      assert File.read!(marker) == "ran\n"
     end
 
     test "a cached rejection never breaks profile generation or execution" do

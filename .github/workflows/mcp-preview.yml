@@ -85,6 +85,9 @@ jobs:
       - name: Verify task reliability on the native platform
         run: |
           mix test apps/evo_git/test/evo_git/config_isolation_test.exs apps/evo_git/test/evo_git/task_progress_test.exs apps/evo_git/test/evo_git/task_budget_test.exs apps/evo_git/test/evo_git/task_registry/task_budget_deadline_test.exs apps/evo_git/test/evo_git/agent_scheduler/worktree_retention_test.exs apps/evo_git/test/evo_git/native_runtime_tools_test.exs apps/evo_git/test/evo_git/build_info_test.exs
+      - name: Verify native macOS sandbox execution
+        if: runner.os == 'macOS'
+        run: mix test apps/evo_git/test/evo_git/sandbox/macos_test.exs
       - name: Bundle the established development tools
         env:
           VENDOR_PLATFORM: ${{ matrix.vendor }}

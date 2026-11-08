@@ -73,7 +73,7 @@ defmodule EvoGit.AgentScheduler.WorktreeRetention do
     repo
     |> Path.join(".genesis/recovery/*.json")
     |> Path.wildcard()
-    |> Enum.flat_map(fn file ->
+    |> Stream.flat_map(fn file ->
       with {:ok, body} <- File.read(file),
            {:ok, entry} when is_map(entry) <- Jason.decode(body),
            true <- is_nil(task_id) or entry["task_id"] == task_id,

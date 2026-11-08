@@ -5,6 +5,7 @@ defmodule EvoGit.TaskProgress do
   verification. Writes use the Store's existing serialized writer.
   """
   @lists ~w(current_work completed remaining blockers next_steps evidence)
+  @plan_lists ~w(remaining blockers next_steps)
 
   def publish(task_id, agent_id, attributes, opts \\ []) do
     with {:ok, clean} <- validate(attributes) do
@@ -60,6 +61,7 @@ defmodule EvoGit.TaskProgress do
     "Report task progress with report_progress when you form a plan, finish a meaningful step, encounter a blocker, or finish verification. " <>
       "Keep it brief: what is complete, what you are doing, what remains, and the next step. Do not repeatedly report unchanged work. " <>
       "Report only your scope; the root owns the overall plan. A commit is not proof that tests passed. " <>
+      "As root, update remaining work, blockers and next steps as you integrate child results; use empty lists to clear resolved items. " <>
       "Before ending, update remaining work and blockers to reflect the final outcome. Before delegation, include established findings, interfaces and acceptance checks in the child objective. " <>
       "Use report_progress for intermediate updates; a plain response without tool calls ends your run."
   end
@@ -103,17 +105,35 @@ defmodule EvoGit.TaskProgress do
       true ->
         report = Map.merge(Map.get(old, "report", %{}), attrs)
 
-        if report == old["report"] do
+        acknowledges_children =
+          is_nil(Map.get(meta, :parent_id)) and
+            Enum.any?(@plan_lists, fn field ->
+              Map.has_key?(attrs, field) and
+                Enum.any?(agents, fn {id, entry} ->
+                  id != key and not is_nil(entry["parent_id"]) and
+                    Map.get(entry["report"], field, []) != [] and
+                    field_revision(entry, field) > field_revision(old, field)
+                end)
+            end)
+
+        if report == old["report"] and not acknowledges_children do
           entry = Map.put(old, "sequence", sequence)
           {:metadata_only, Map.put(previous, "agents", Map.put(agents, key, entry))}
         else
           revision = Map.get(previous, "revision", 0) + 1
+
+          field_revisions =
+            Enum.reduce(Map.keys(attrs), Map.get(old, "field_revisions", %{}), fn field,
+                                                                                  revisions ->
+              Map.put(revisions, field, revision)
+            end)
 
           entry = %{
             "report" => report,
             "sequence" => sequence,
             "parent_id" => Map.get(meta, :parent_id),
             "revision" => revision,
+            "field_revisions" => field_revisions,
             "source" => to_string(Map.get(meta, :source, :agent_report))
           }
 
@@ -134,9 +154,21 @@ defmodule EvoGit.TaskProgress do
       Map.new(@lists, fn field ->
         values =
           Enum.flat_map(ordered, fn {id, entry} ->
-            Enum.map(Map.get(entry["report"], field, []), fn text ->
-              %{"text" => text, "agent_id" => id, "source" => entry["source"]}
-            end)
+            root = Map.get(agents, root_id, %{})
+
+            applicable =
+              field in ~w(completed evidence) or id == root_id or
+                (not is_nil(entry["parent_id"]) and
+                   (field not in @plan_lists or
+                      field_revision(entry, field) > field_revision(root, field)))
+
+            if applicable do
+              Enum.map(Map.get(entry["report"], field, []), fn text ->
+                %{"text" => text, "agent_id" => id, "source" => entry["source"]}
+              end)
+            else
+              []
+            end
           end)
           |> Enum.uniq_by(& &1["text"])
 
@@ -183,6 +215,13 @@ defmodule EvoGit.TaskProgress do
             revision
           )
       end
+    end
+  end
+
+  defp field_revision(entry, field) do
+    case entry["field_revisions"] do
+      nil -> Map.get(entry, "revision", 0)
+      revisions -> Map.get(revisions, field, 0)
     end
   end
 
