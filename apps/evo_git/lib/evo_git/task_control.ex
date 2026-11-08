@@ -427,7 +427,8 @@ defmodule EvoGit.TaskControl do
   rescue
     e -> error("unavailable", Exception.message(e))
   catch
-    :exit, reason -> error("unavailable", "Task service unavailable: #{inspect(reason)}")
+    :exit, {:timeout, _call} -> error("unavailable", "Task service did not respond in time.")
+    :exit, _reason -> error("unavailable", "Task service is unavailable.")
   end
 
   defp error(code, message), do: {:error, %{code: code, message: message}}

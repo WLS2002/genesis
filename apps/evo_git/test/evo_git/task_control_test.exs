@@ -4,6 +4,16 @@ defmodule EvoGit.TaskControlTest do
   alias EvoGit.TaskControl
   @moduletag :tmp_dir
 
+  test "service failures do not expose GenServer call arguments" do
+    Process.put(:evogit_task_registry_server, :missing_registry_during_control_test)
+
+    assert {:error, %{code: "unavailable", message: message}} =
+             TaskControl.get(%{"task_id" => "sensitive-internal-argument"})
+
+    refute message =~ "sensitive-internal-argument"
+    refute message =~ "GenServer"
+  end
+
   test "rejects invalid submissions before creating a task", %{tmp_dir: path} do
     for args <- [
           %{"path" => "relative", "objective" => "work"},
