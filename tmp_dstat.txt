@@ -1,0 +1,7 @@
+﻿ .../lib/evo_dash_web/components/layouts.ex         |  13 +-
+ apps/evo_dash/lib/evo_dash_web/live/home_live.ex   | 175 +++++++++++++++++++--
+ .../lib/evo_dash_web/live/home_live/chat_state.ex  |   9 ++
+ apps/evo_dash/lib/evo_dash_web/router.ex           |   4 +-
+ .../evo_dash_web/live/home_live_render_test.exs    |  37 ++++-
+ .../test/evo_dash_web/live/home_live_test.exs      |  16 +-
+ 6 files changed, 233 insertions(+), 21 deletions(-)

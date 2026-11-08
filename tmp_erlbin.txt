@@ -1,0 +1,12 @@
+﻿ct_run.exe
+dialyzer.exe
+erl.exe
+erlc.exe
+erl_call.exe
+escript.exe
+no_dot_erlang.boot
+start.boot
+start_clean.boot
+start_sasl.boot
+typer.exe
+werl.exe
