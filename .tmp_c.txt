@@ -1,0 +1,11 @@
+﻿git : warning: in the working copy of 'apps/evo_git/test/evo_git/self_reflective_tools_test.exs', LF will be replaced b
+y CRLF the next time Git touches it
+At line:1 char:63
++ ... ing]::UTF8; git add apps/evo_git/test/evo_git/self_reflective_tools_t ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (warning: in the... Git touches it:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+[evogit-agent-T6-A1 2f76838ce] test(assistant): pin the task-control persona in the legacy assistant suite
+ 1 file changed, 132 insertions(+), 297 deletions(-)
+2f76838ce test(assistant): pin the task-control persona in the legacy assistant suite

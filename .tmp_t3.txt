@@ -1,0 +1,7 @@
+﻿  1) test execute/4 - edit_context edit_context with hostile dir_path (quotes/angle brackets) commits and round-trips (EvoGit.Agent.ToolsTest)
+     code: File.mkdir_p!(Path.join(tmp_dir, hostile_dir))
+  2) test execute/4 - write_context write_context with hostile dir_path (quotes/angle brackets) commits and round-trips (EvoGit.Agent.ToolsTest)
+     code: File.mkdir_p!(Path.join(tmp_dir, hostile_dir))
+Result: 87/89 passed
+Failed: 2 tests
+exit=2
