@@ -72,7 +72,7 @@ defmodule EvoGit.TaskRegistry.StoreSkipAndLogTest do
             # both are created by Boot's migrations at store start; the
             # assertion's intent is that skip-and-log performs NO
             # data-movement DDL of its own.
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT IN ('tasks', 'projects', 'schema_migrations', 'task_agent_archives')",
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT IN ('tasks', 'projects', 'schema_migrations', 'task_agent_archives', 'task_progress')",
             []
           )
 
@@ -199,7 +199,7 @@ defmodule EvoGit.TaskRegistry.StoreSkipAndLogTest do
             # both are created by Boot's migrations at store start; the
             # assertion's intent is that skip-and-log performs NO
             # data-movement DDL of its own.
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT IN ('tasks', 'projects', 'schema_migrations', 'task_agent_archives')",
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT IN ('tasks', 'projects', 'schema_migrations', 'task_agent_archives', 'task_progress')",
             []
           )
 

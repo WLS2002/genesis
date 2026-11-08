@@ -18,14 +18,20 @@ defmodule EvoGit.TaskControl.Messaging do
   @runnable_statuses [:running, :waiting, :ready, :blocked]
 
   @spec send(String.t(), String.t()) :: {:ok, map()} | {:error, map()}
-  def send(task_id, message) do
+  def send(task_id, message, agent_id \\ nil) do
     with :ok <- active_task(task_id),
-         {:ok, root} <- runnable_root(task_id) do
-      case AgentScheduler.send_user_message(root.id, message) do
+         {:ok, root} <- recipient(task_id, agent_id) do
+      message_id = Base.encode16(:crypto.strong_rand_bytes(12), case: :lower)
+      :ok = EvoGit.TaskProgress.record_message(task_id, message_id, root.id, "queued")
+      payload = %{text: message, attachments: nil, progress_message_id: message_id}
+
+      case AgentScheduler.send_user_message(root.id, payload) do
         :ok ->
           {:ok,
            %{
              task_id: task_id,
+             message_id: message_id,
+             delivery_state: "queued",
              recipient_agent_id: root.id,
              status: "queued_for_next_turn",
              acknowledged: false,
@@ -33,10 +39,34 @@ defmodule EvoGit.TaskControl.Messaging do
            }}
 
         {:error, :not_found} ->
+          EvoGit.TaskProgress.record_message(task_id, message_id, root.id, "not_delivered")
           no_root()
       end
     end
   end
+
+  defp recipient(task_id, nil), do: runnable_root(task_id)
+
+  defp recipient(task_id, id) when is_integer(id) and id > 0 do
+    case Store.get_sched_meta(id) do
+      {:ok,
+       %SchedMeta{
+         task_id: ^task_id,
+         status: status,
+         task_ref: %Task{pid: pid},
+         result_sent: false
+       }}
+      when status in @runnable_statuses ->
+        if Process.alive?(pid),
+          do: {:ok, %{id: id}},
+          else: error("invalid_recipient", "Agent is no longer active.")
+
+      _ ->
+        error("invalid_recipient", "Select a live agent belonging to this task.")
+    end
+  end
+
+  defp recipient(_, _), do: error("invalid_recipient", "agent_id must be a positive integer.")
 
   defp active_task(task_id) do
     case TaskRegistry.get_task_lite(task_id) do

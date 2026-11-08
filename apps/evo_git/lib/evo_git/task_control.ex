@@ -11,7 +11,7 @@ defmodule EvoGit.TaskControl do
   alias EvoGit.Store.Codec
 
   @terminal [:completed, :failed, :cancelled]
-  @start_keys ~w(path objective task_type mode resume_from model_id)
+  @start_keys ~w(path objective task_type mode resume_from model_id budget)
 
   def check(args) do
     with :ok <- keys(args, ~w(path)),
@@ -23,6 +23,7 @@ defmodule EvoGit.TaskControl do
       {:ok,
        %{
          version: to_string(Application.spec(:evo_git, :vsn)),
+         build: EvoGit.BuildInfo.get(),
          ready: model_ready and (is_nil(project) or project.ready),
          model_ready: model_ready,
          provider_connection_tested: false,
@@ -32,6 +33,8 @@ defmodule EvoGit.TaskControl do
              Enum.map(config.validation_errors, fn e ->
                "Invalid configuration key: #{Enum.join(e.key_path, ".")}."
              end),
+         recoverable_work:
+           if(path, do: EvoGit.AgentScheduler.WorktreeRetention.list(path), else: []),
          project: project
        }}
     end
@@ -62,7 +65,9 @@ defmodule EvoGit.TaskControl do
          :ok <- model_profile(args),
          {:ok, args} <- task_mode(args),
          :ok <- resume(args, path),
-         {:ok, type, opts} <- StartOptions.build(Map.put(args, "path", path)) do
+         {:ok, budget} <- budget_args(Map.get(args, "budget")),
+         {:ok, type, opts} <-
+           StartOptions.build(args |> Map.put("path", path) |> Map.put("budget", budget)) do
       safe(fn ->
         case TaskRegistry.start_task(type, opts) do
           {:ok, task} -> {:ok, project(task)}
@@ -72,17 +77,29 @@ defmodule EvoGit.TaskControl do
     end
   end
 
+  defp budget_args(value) do
+    case EvoGit.TaskBudget.normalize(value) do
+      {:ok, budget} -> {:ok, budget}
+      _ -> error("invalid_arguments", "budget must contain supported positive integer limits.")
+    end
+  end
+
   def get(args) do
-    with :ok <- keys(args, ~w(task_id since wait_seconds include_result)),
+    with :ok <- keys(args, ~w(task_id since wait_seconds include_result include_objective)),
          {:ok, id} <- required_string(args, "task_id"),
          :ok <- optional_strings(args, ~w(since)),
          {:ok, wait} <- integer(args, "wait_seconds", 0, 0, 20),
-         true <- is_boolean(Map.get(args, "include_result", true)) do
+         true <-
+           is_boolean(Map.get(args, "include_result", true)) and
+             is_boolean(Map.get(args, "include_objective", false)) do
       deadline = System.monotonic_time(:millisecond) + wait * 1000
       safe(fn -> observe(id, args, deadline) end)
     else
-      false -> error("invalid_arguments", "include_result must be a boolean.")
-      other -> other
+      false ->
+        error("invalid_arguments", "include_result and include_objective must be booleans.")
+
+      other ->
+        other
     end
   end
 
@@ -101,6 +118,11 @@ defmodule EvoGit.TaskControl do
           observe(id, args, deadline)
         else
           data = project(task) |> Map.put(:progress, progress) |> Map.put(:changed, changed)
+
+          data =
+            if Map.get(args, "include_objective", false),
+              do: Map.put(data, :objective, task_objective(task)),
+              else: data
 
           data =
             if Map.get(args, "include_result", true), do: data, else: Map.delete(data, :result)
@@ -124,14 +146,22 @@ defmodule EvoGit.TaskControl do
 
   def models(args) do
     with :ok <- keys(args, []) do
-      profiles = Config.resolve() |> EvoGit.Config.Schema.model_profiles()
+      config = Config.resolve()
+      profiles = EvoGit.Config.Schema.model_profiles(config)
+      configured_default = get_in(config, [:llm, :default_provider_profile])
 
       models =
         Enum.with_index(profiles)
         |> Enum.map(fn {profile, index} ->
           model = profile[:model]
           model = if is_map(model), do: Map.take(model, [:provider, :id]), else: model
-          %{id: profile[:id], model: model, default: index == 0}
+
+          %{
+            id: profile[:id],
+            model: model,
+            default:
+              if(configured_default, do: profile[:id] == configured_default, else: index == 0)
+          }
         end)
 
       {:ok, %{models: models}}
@@ -139,10 +169,10 @@ defmodule EvoGit.TaskControl do
   end
 
   def message(args) do
-    with :ok <- keys(args, ~w(task_id message)),
+    with :ok <- keys(args, ~w(task_id message agent_id)),
          {:ok, id} <- required_string(args, "task_id"),
          {:ok, message} <- required_string(args, "message") do
-      safe(fn -> EvoGit.TaskControl.Messaging.send(id, message) end)
+      safe(fn -> EvoGit.TaskControl.Messaging.send(id, message, Map.get(args, "agent_id")) end)
     end
   end
 
@@ -191,15 +221,25 @@ defmodule EvoGit.TaskControl do
   end
 
   def cancel(args) do
-    with :ok <- keys(args, ~w(task_id)),
-         {:ok, id} <- required_string(args, "task_id") do
+    with :ok <- keys(args, ~w(task_id force wait_seconds)),
+         {:ok, id} <- required_string(args, "task_id"),
+         {:ok, wait} <- integer(args, "wait_seconds", 0, 0, 20),
+         true <- is_boolean(Map.get(args, "force", false)) do
       safe(fn ->
-        case TaskRegistry.cancel_task(id) do
-          :ok -> get(args)
+        result =
+          if Map.get(args, "force", false),
+            do: TaskRegistry.force_kill_task(id),
+            else: TaskRegistry.cancel_task(id)
+
+        case result do
+          :ok -> EvoGit.TaskControl.Stopping.await(id, wait)
           {:error, :not_found} -> error("not_found", "Task not found: #{id}")
           {:error, reason} -> error("cancel_failed", inspect(reason))
         end
       end)
+    else
+      false -> error("invalid_arguments", "force must be a boolean.")
+      other -> other
     end
   end
 
@@ -262,8 +302,14 @@ defmodule EvoGit.TaskControl do
       type: to_string(task.type),
       status: to_string(task.status),
       project_path: task_path(task),
-      objective:
-        Keyword.get(task.opts || [], :objective) || Keyword.get(task.opts || [], :prompt),
+      effective_budget: Keyword.get(task.opts || [], :budget),
+      recoverable_work:
+        if(is_binary(task_path(task)),
+          do: EvoGit.AgentScheduler.WorktreeRetention.list(task_path(task), task.id),
+          else: []
+        ),
+      objective_summary: String.slice(task_objective(task) || "", 0, 200),
+      objective_length: String.length(task_objective(task) || ""),
       started_at: Codec.encode_datetime(task.started_at),
       finished_at: Codec.encode_datetime(task.finished_at),
       base_sha: task.base_sha,
@@ -274,6 +320,9 @@ defmodule EvoGit.TaskControl do
       error: task.error
     }
   end
+
+  defp task_objective(task),
+    do: Keyword.get(task.opts || [], :objective) || Keyword.get(task.opts || [], :prompt)
 
   defp task_path(task) do
     case task.project_path || Keyword.get(task.opts || [], :path) do

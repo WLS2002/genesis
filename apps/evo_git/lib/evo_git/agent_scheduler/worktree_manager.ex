@@ -1,68 +1,15 @@
 defmodule EvoGit.AgentScheduler.WorktreeManager do
   @moduledoc """
-  Worktree lifecycle owner for the AgentScheduler.
+  Owns agent worktree creation, process monitoring and safe cleanup.
 
-  Owns the ENTIRE worktree lifecycle so the AgentScheduler GenServer never
-  blocks on worktree I/O:
+  Creation is offloaded and admitted FIFO with bounded concurrency. Callers
+  wait for the create result without a timeout that could start duplicate
+  copies. Manager-only restarts rebuild monitors from scheduler ETS.
 
-  - Lazy per-repo initialization of the `.genesis/workers` directory (once per
-    repo, on first request for that repo).
-  - Fresh worktree creation on request from the agent Runner. The Runner's
-    `GenServer.call` waits INDEFINITELY (`@worktree_call_timeout` is
-    `:infinity`): a legitimately slow copy (Windows has no CoW and pays a full
-    `Copy-Item -Recurse` of a large `node_modules` per worktree) must never be
-    aborted by a timeout, because a timed-out call raises only in the CALLER
-    while the create keeps running — the caller then crash-retries the SAME
-    copy (a positive-feedback spiral). The actual I/O is offloaded to a spawned
-    task so this GenServer's message loop stays responsive for `:DOWN`/cleanup
-    messages while creation is in flight. Because the caller waits forever,
-    that task ALWAYS replies to it exactly once — its result, or
-    `{:error, reason}` when the create pipeline raises/throws/exits or dies
-    abnormally — so an indefinite wait can never leave a caller blocked on a
-    create that is already dead.
-  - Bounded admission for create pipelines: requests are queued FIFO and at
-    most `max_concurrent_creation/0` (app env
-    `:max_concurrent_worktree_creation`, default 4) create tasks run at once.
-    A permit is held only for the duration of one create pipeline and is
-    always released via the `{:create_finished, ...}` cast, so the queue
-    always drains. This bounds CREATE concurrency only — never the number of
-    live worktrees/agents — and is deadlock-free: a parent parked in
-    `spawn_sub_agents/2` holds its created worktree but no create permit.
-  - Process monitoring: every agent process is monitored; when it exits (for
-    ANY reason — `:normal` completion or crash), its worktree is destroyed.
-    Cleanup is identical for normal and abnormal exits — there is no reuse
-    semantics; every run gets a fresh worktree.
-  - Deferred cleanup for agents that die while their create task is still in
-    flight (the cleanup runs when the create finishes); an agent that dies
-    while its create request is still QUEUED is dropped from the admission
-    queue instead (no create is started for it).
-  - Per-agent serialization of re-create requests: a retry Runner arriving
-    while the previous request is still `:creating` or still `:queued` has its
-    request queued in `pending_requests` and re-enters the same admission path
-    when the previous request finishes.
-  - Crash-restart safety (this GenServer is a one_for_one child of
-    `EvoGit.Supervisor` — a crash restarts IT without killing the running
-    agent Tasks, which keep running in their live worktrees):
-    * The destructive per-repo init (rm_rf workers dir + orphaned branch
-      cleanup + prune) is gated on a PERSISTENT marker in the app-owned ETS
-      table `:evogit_worktree_repos` (created in `EvoGit.Application.start/2`,
-      same pattern as `:evogit_cancelling_tasks`). The marker survives
-      WorktreeManager restarts — a manager-only restart SKIPS the wipe,
-      preserving live agents' worktrees; it dies with the app, so a genuine
-      BEAM restart (no live agents) re-runs the full wipe. Reading/writing is
-      defensive via `:ets.whereis` (a missing table means "uninitialized").
-    * The destructive steps (rm_rf workers base + orphaned `evogit-agent-*`
-      branch cleanup) run for the PRIMARY repo only (`primary?` flag, derived
-      at the call sites from `spec.repo_id` via `ForeignRepo.primary?/1`).
-      Foreign repos — which may be writable per-task and hold real
-      `evogit-agent-*` task branches — get only the non-destructive prune +
-      workers-dir ensure + init marker.
-    * On restart, live agents are re-monitored from their scheduler ETS rows
-      (`:evogit_sched_meta` worktree + task_ref, `:evogit_agent_state`
-      repo_root + task_local_id), so `:DOWN`-driven cleanup keeps working for
-      agents whose worktrees predate the crash.
-
-  The AgentScheduler itself never touches worktree I/O.
+  Previous runs are preserved on startup. Both teardown and same-path retry
+  consult WorktreeRetention: dirty work, unpublished commits and uncertain
+  Git state survive in their registered worktrees. Only clean, durably
+  referenced work is discarded. Background jobs are reaped before cleanup.
   """
 
   use GenServer
@@ -127,6 +74,8 @@ defmodule EvoGit.AgentScheduler.WorktreeManager do
     )
   end
 
+  def pending_for_task(id), do: GenServer.call(__MODULE__, {:pending_for_task, id}, 1000)
+
   # --- GenServer Callbacks ---
 
   @impl true
@@ -161,6 +110,12 @@ defmodule EvoGit.AgentScheduler.WorktreeManager do
     # the crash) from their scheduler ETS rows so :DOWN-driven cleanup keeps
     # working. Tolerant — missing/stale rows are skipped, never crashes init.
     {:ok, rebuild_monitors(state)}
+  end
+
+  @impl true
+  def handle_call({:pending_for_task, id}, _from, state) do
+    count = Enum.count(state.agents, fn {_, info} -> Map.get(info, :task_id) == id end)
+    {:reply, count, state}
   end
 
   @impl true
@@ -494,18 +449,13 @@ defmodule EvoGit.AgentScheduler.WorktreeManager do
       {:ok, agent_state} ->
         branch_name = Worktrees.branch_name(meta.task_number, agent_state.task_local_id)
 
-        EvoGit.AgentScheduler.WorktreeRetention.record(repo_root, worktree_path, branch_name, %{
-          task_id: meta.task_id,
-          agent_id: agent_id,
-          retained: false
-        })
-
         ref = Process.monitor(agent_pid)
 
         state = %{
           state
           | agents:
               Map.put(state.agents, agent_id, %{
+                task_id: meta.task_id,
                 worktree_path: worktree_path,
                 repo_root: repo_root,
                 branch_name: branch_name,
@@ -815,6 +765,7 @@ defmodule EvoGit.AgentScheduler.WorktreeManager do
         state
         | agents:
             Map.put(state.agents, agent_id, %{
+              task_id: meta.task_id,
               worktree_path: worktree,
               repo_root: repo_root || Worktrees.repo_root_from_worktree(worktree),
               branch_name: Worktrees.branch_name(task_number, task_local_id),

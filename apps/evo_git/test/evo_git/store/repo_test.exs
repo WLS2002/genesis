@@ -68,7 +68,8 @@ defmodule EvoGit.Store.RepoTest do
     @composite_index_version,
     @covering_index_version,
     @archive_table_version,
-    @prune_indexes_version
+    @prune_indexes_version,
+    20_261_108_000_001
   ]
 
   # `tasks` columns RETIRED from the live table: the per-agent archive moved to
@@ -254,7 +255,13 @@ defmodule EvoGit.Store.RepoTest do
                pid,
                "SELECT name FROM sqlite_master WHERE type = 'table' " <>
                  "AND name NOT LIKE 'sqlite_stat%' ORDER BY name"
-             ) == [["projects"], ["schema_migrations"], [@archive_table], ["tasks"]]
+             ) == [
+               ["projects"],
+               ["schema_migrations"],
+               [@archive_table],
+               ["task_progress"],
+               ["tasks"]
+             ]
     end
   end
 
@@ -438,6 +445,7 @@ defmodule EvoGit.Store.RepoTest do
                      [@archive_index_name, @archive_table],
                      [@archive_pk_autoindex, @archive_table],
                      ["sqlite_autoindex_projects_1", "projects"],
+                     ["sqlite_autoindex_task_progress_1", "task_progress"],
                      ["sqlite_autoindex_tasks_1", "tasks"]
                    ]
                )

@@ -46,7 +46,8 @@ defmodule EvoGit.MigrateStoreTest do
     @composite_index_version,
     @covering_index_version,
     @archive_table_version,
-    @prune_indexes_version
+    @prune_indexes_version,
+    20_261_108_000_001
   ]
 
   @migration_count length(@migration_versions)
@@ -159,7 +160,7 @@ defmodule EvoGit.MigrateStoreTest do
       assert migration_versions(path) == @migration_versions
 
       assert Enum.sort(table_names(path)) ==
-               ["projects", "schema_migrations", "task_agent_archives", "tasks"]
+               ["projects", "schema_migrations", "task_agent_archives", "task_progress", "tasks"]
 
       assert Enum.sort(columns(path)) == Enum.sort(@live_task_columns)
       assert "error" in columns(path)

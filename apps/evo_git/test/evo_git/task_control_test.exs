@@ -10,12 +10,24 @@ defmodule EvoGit.TaskControlTest do
           %{"path" => path, "objective" => " "},
           %{"path" => path, "objective" => "work", "task_type" => "reflect"},
           %{"path" => path, "objective" => "work", "mode" => "custom"},
+          %{"path" => path, "objective" => "work", "budget" => %{"max_agents" => 0}},
           %{"path" => path, "objective" => "work", "unexpected" => true}
         ] do
       assert {:error, %{code: "invalid_arguments"}} = TaskControl.start(args)
     end
 
     assert TaskRegistry.list_tasks() == []
+  end
+
+  test "cancellation distinguishes an accepted request from stopped work" do
+    seed!("pending-stop", :pending, "/tmp/project", nil)
+    assert {:ok, data} = TaskControl.cancel(%{"task_id" => "pending-stop", "wait_seconds" => 1})
+    assert data.status == "cancelled"
+    assert data.stop_requested
+    assert data.stopped in [true, nil]
+
+    assert {:error, %{code: "invalid_arguments"}} =
+             TaskControl.cancel(%{"task_id" => "pending-stop", "force" => "yes"})
   end
 
   test "returns structured completed and failed results without exposing runtime opts" do

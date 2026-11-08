@@ -259,3 +259,7 @@ The trailing `node()` is the emitting node; subscribers ignore other nodes for n
 Structured external task access: `../task_control.ex` validates the public development-task inputs and projects JSON-safe results; `start_options.ex` holds the option builder shared with the command-shell StartTask tool. TaskRegistry remains the sole task owner; no extra table or lifecycle. Resume is evolve-only and the external boundary requires a finished task in the same project.
 
 TaskControl daily workflow: `../task_control/observation.ex` projects bounded scheduler observations and deterministic change tokens without persisting another event stream. `../task_control/messaging.ex` targets the running task’s live root and reports queue acceptance only. `TaskControl.get/1` supports since/wait_seconds (0–20) and optional result omission; list supports status/search; result/models/message back the expanded MCP tools.
+
+## Explicit task execution budgets
+
+`StartOptions` preserves normalized task budgets; MCP supplies conservative defaults while existing GUI/CLI defaults remain unchanged. Registry owns elapsed-time deadlines and bounded graceful-stop escalation, independent of MCP connectivity. Budget exhaustion persists a structured task error; later partial-result recovery preserves that error and cannot label the task completed. `task_store/0` resolves the owning registry's Store for shared progress and archives without a registry self-call.

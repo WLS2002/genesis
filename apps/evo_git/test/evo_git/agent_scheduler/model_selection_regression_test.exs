@@ -124,6 +124,13 @@ defmodule EvoGit.AgentScheduler.ModelSelectionRegressionTest do
 
   # The schema's model_spec is a ReqLLM identifier, not the task selection map.
   # Generation params deliberately retain the schema's full credential contract.
+  # Dispatch adds per-run cache routing identity; it isn't a generation setting.
+  defp generation_settings(params) do
+    provider = params |> Keyword.get(:provider_options, []) |> Keyword.delete(:prompt_cache_key)
+    params = Keyword.delete(params, :provider_options)
+    if provider == [], do: params, else: Keyword.put(params, :provider_options, provider)
+  end
+
   defp assert_binding(binding, config, requested) do
     assert {:ok, resolved} = Schema.resolve_model_spec(config, requested)
 
@@ -140,7 +147,10 @@ defmodule EvoGit.AgentScheduler.ModelSelectionRegressionTest do
     assert binding.provider_profile_id == resolved.provider_profile_id
     assert binding.model_spec == expected
     assert binding.llm_model == resolved.model_spec
-    assert binding.llm_generation_params == resolved.generation_params
+
+    assert generation_settings(binding.llm_generation_params) ==
+             generation_settings(resolved.generation_params)
+
     assert binding.llm_context_window == Schema.LLM.context_window(resolved.runtime_profile)
   end
 

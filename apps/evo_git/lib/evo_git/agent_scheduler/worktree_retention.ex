@@ -71,7 +71,6 @@ defmodule EvoGit.AgentScheduler.WorktreeRetention do
     repo
     |> Path.join(".genesis/recovery/*.json")
     |> Path.wildcard()
-    |> Enum.take(100)
     |> Enum.flat_map(fn file ->
       with {:ok, body} <- File.read(file),
            {:ok, entry} when is_map(entry) <- Jason.decode(body),
@@ -83,6 +82,7 @@ defmodule EvoGit.AgentScheduler.WorktreeRetention do
         _ -> []
       end
     end)
+    |> Enum.take(100)
   end
 
   defp branch_disposition(repo, branch) do

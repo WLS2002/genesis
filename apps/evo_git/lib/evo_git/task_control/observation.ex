@@ -34,6 +34,7 @@ defmodule EvoGit.TaskControl.Observation do
     {available, agents} = agents(task.id)
 
     content = %{
+      report: message_states(task.progress, agents, available),
       scheduler_available: available,
       registered_agent_count: length(agents),
       agent_status_counts: Enum.frequencies_by(agents, & &1.status),
@@ -85,6 +86,24 @@ defmodule EvoGit.TaskControl.Observation do
       :ets.whereis(:evogit_agent_state) != :undefined
   end
 
+  defp message_states(nil, _, _), do: nil
+
+  defp message_states(report, agents, available) do
+    ids = MapSet.new(agents, & &1.id)
+
+    if not Map.has_key?(report, "messages"),
+      do: report,
+      else:
+        Map.update!(report, "messages", fn messages ->
+          Enum.map(messages, fn receipt ->
+            if receipt["state"] == "queued" and
+                 (not available or not MapSet.member?(ids, receipt["agent_id"])),
+               do: Map.put(receipt, "state", "unknown"),
+               else: receipt
+          end)
+        end)
+  end
+
   defp agent(summary) do
     # This is an ETS read, with context removed by RemoteAPI. No message is sent
     # to the agent process, even when that process is blocked in a long call.
@@ -99,9 +118,14 @@ defmodule EvoGit.TaskControl.Observation do
       model_id: text(summary.model_id),
       objective: text(summary.objective),
       activity: %{
+        phase: if(state && state.activity, do: state.activity.phase),
+        tools: if(state && state.activity, do: state.activity.tools, else: []),
+        updated_at: if(state && state.activity, do: state.activity.updated_at),
         turn: if(state, do: number(state.turn)),
         message_count: number(summary.message_count),
         total_tokens: number(summary.total_tokens),
+        tokens_since_compression: number(summary.total_tokens),
+        cumulative_usage: usage((state && state.usage) || %{}),
         compression_count: number(summary.compression_count),
         retries: number(summary.retries),
         current_commit: text(summary.current_commit)

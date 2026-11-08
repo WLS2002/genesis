@@ -40,7 +40,7 @@ defmodule EvoGit.Store.MaintenanceTest do
   # Every shipped store migration: baseline adoption, data normalization, the
   # two index migrations, the archive table and the redundant-index prune — so
   # `schema_migrations` holds 6 rows.
-  @migration_count 6
+  @migration_count 7
 
   # One schema-complete, CHECKPOINTED database built per module
   # (`EvoGit.TestSupport.StoreTemplate`): a brand-new file plus the six

@@ -625,6 +625,7 @@ defmodule EvoGit.Runtime.Helpers do
 
     spec_opts =
       [
+        budget: Keyword.get(opts, :budget),
         foreign_repos: foreign_repos,
         repo_notes: repo_notes,
         archive: Keyword.get(opts, :archive, false),

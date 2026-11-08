@@ -507,6 +507,7 @@ defmodule EvoGit.Store.BootNormalizationTest do
                ["projects"],
                ["schema_migrations"],
                ["task_agent_archives"],
+               ["task_progress"],
                ["tasks"]
              ]
     end

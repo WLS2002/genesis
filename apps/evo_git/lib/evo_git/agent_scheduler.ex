@@ -286,9 +286,7 @@ defmodule EvoGit.AgentScheduler do
   """
   @spec update_phylo_node(pos_integer(), PhyloGraphNode.t()) :: :ok | :error
   def update_phylo_node(agent_id, %PhyloGraphNode{} = phylo_node) do
-    {:ok, agent_state} = Store.get_agent_state(agent_id)
-    updated = %{agent_state | phylo_node: phylo_node}
-    Store.put_agent_state(agent_id, updated)
+    Store.batch_update_agent(agent_id, phylo_node: phylo_node)
   end
 
   @doc """
@@ -307,6 +305,9 @@ defmodule EvoGit.AgentScheduler do
 
   Returns `:ok` on success, or `{:error, :not_found}` if the agent doesn't exist.
   """
+  def drain_user_messages(agent_id),
+    do: GenServer.call(__MODULE__, {:drain_user_messages, agent_id})
+
   @spec send_user_message(pos_integer(), String.t() | map()) :: :ok | {:error, :not_found}
   def send_user_message(agent_id, message) when is_binary(message) or is_map(message) do
     GenServer.call(__MODULE__, {:send_user_message, agent_id, message})
@@ -837,7 +838,7 @@ defmodule EvoGit.AgentScheduler do
       _tid -> :ets.delete(:evogit_cancelling_tasks, task_id)
     end
 
-    {:reply, :ok, state}
+    {:reply, :ok, %{state | task_budget_counts: Map.delete(state.task_budget_counts, task_id)}}
   end
 
   @impl true
@@ -910,6 +911,11 @@ defmodule EvoGit.AgentScheduler do
   @impl true
   def handle_call(:paused?, _from, %State{} = state) do
     {:reply, state.paused, state}
+  end
+
+  @impl true
+  def handle_call({:drain_user_messages, agent_id}, _from, state) do
+    {:reply, Store.drain_pending_user_messages(agent_id), state}
   end
 
   @impl true

@@ -25,7 +25,7 @@ defmodule EvoGit.TaskControl.MessagingTest do
               acknowledged: false
             }} = Messaging.send(task_id, "Please prioritize the failing test.")
 
-    assert {:ok, %{pending_user_messages: ["Please prioritize the failing test."]}} =
+    assert {:ok, %{pending_user_messages: [%{text: "Please prioritize the failing test."}]}} =
              Store.get_agent_state(root)
 
     assert {:ok, %{pending_user_messages: []}} = Store.get_agent_state(child)
@@ -33,7 +33,7 @@ defmodule EvoGit.TaskControl.MessagingTest do
 
     assert {:ok, _} = Messaging.send(task_id, "Keep the current public API.")
 
-    assert Store.drain_pending_user_messages(root) == [
+    assert Enum.map(Store.drain_pending_user_messages(root), & &1.text) == [
              "Please prioritize the failing test.",
              "Keep the current public API."
            ]
@@ -46,7 +46,66 @@ defmodule EvoGit.TaskControl.MessagingTest do
     root = put_agent(task_id, status: :waiting)
 
     assert {:ok, %{recipient_agent_id: ^root}} = Messaging.send(task_id, "Revise the plan.")
-    assert {:ok, %{pending_user_messages: ["Revise the plan."]}} = Store.get_agent_state(root)
+
+    assert {:ok, %{pending_user_messages: [%{text: "Revise the plan."}]}} =
+             Store.get_agent_state(root)
+  end
+
+  test "targets a task's child and records delivery after context injection" do
+    task_id = put_task(:running)
+    root = put_agent(task_id, status: :waiting)
+    child = put_agent(task_id, parent_id: root, depth: 1)
+    assert {:ok, receipt} = Messaging.send(task_id, "Fix the fixture", child)
+    assert receipt.recipient_agent_id == child
+    assert is_binary(receipt.message_id)
+    assert EvoGit.TaskProgress.get(task_id)["messages"] |> Enum.any?(&(&1["state"] == "queued"))
+
+    state = %EvoGit.Agent.LoopState{
+      agent_id: child,
+      agent_module: EvoGit.Agents.Executor,
+      depth: 1,
+      node_path: ".",
+      context: ReqLLM.Context.new([]),
+      turn: 1
+    }
+
+    _ = EvoGit.Agent.Runner.drain_and_inject_user_messages(state)
+
+    assert EvoGit.TaskProgress.get(task_id)["messages"]
+           |> Enum.any?(&(&1["state"] == "delivered"))
+
+    other = put_agent(put_task(:running))
+    assert {:error, %{code: "invalid_recipient"}} = Messaging.send(task_id, "cross task", other)
+  end
+
+  test "the internal reporting tool updates the shared report for its own task" do
+    task_id = put_task(:running)
+    root = put_agent(task_id)
+    Process.put(:evogit_agent_id, root)
+
+    result =
+      EvoGit.Agent.Tools.execute("report_progress", %{"summary" => "Implementing backend"}, nil)
+
+    assert Jason.decode!(result)["status"] == "recorded"
+    assert EvoGit.TaskProgress.get(task_id)["summary"] == "Implementing backend"
+  end
+
+  test "concurrent context updates cannot overwrite accepted messages" do
+    task_id = put_task(:running)
+    root = put_agent(task_id)
+
+    updates =
+      Task.async(fn ->
+        for n <- 1..200, do: Store.batch_update_agent(root, total_tokens: n)
+      end)
+
+    for n <- 1..40 do
+      assert {:ok, _} = Messaging.send(task_id, "message #{n}")
+    end
+
+    Task.await(updates)
+    messages = Store.drain_pending_user_messages(root)
+    assert Enum.map(messages, & &1.text) == Enum.map(1..40, &"message #{&1}")
   end
 
   test "missing tasks and inactive task states do not enqueue messages" do

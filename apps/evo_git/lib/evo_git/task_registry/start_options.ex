@@ -21,9 +21,11 @@ defmodule EvoGit.TaskRegistry.StartOptions do
          {:ok, mode} <- Shared.fetch_optional_string_arg(args, "mode"),
          {:ok, resume_from} <- Shared.fetch_optional_string_arg(args, "resume_from"),
          {:ok, starting_commit} <- Shared.fetch_optional_string_arg(args, "starting_commit"),
-         {:ok, model_id} <- Shared.fetch_optional_string_arg(args, "model_id") do
+         {:ok, model_id} <- Shared.fetch_optional_string_arg(args, "model_id"),
+         {:ok, budget} <- budget(args) do
       opts =
         []
+        |> maybe_put(:budget, budget)
         |> maybe_put(:objective, objective)
         # Data-plane routing: TaskExecutor.execute_task(:genesis, ...) reads the
         # genesis prompt from opts[:prompt] (Keyword.get(opts, :prompt, "") ->
@@ -42,6 +44,12 @@ defmodule EvoGit.TaskRegistry.StartOptions do
 
       {:ok, task_type, opts}
     end
+  end
+
+  defp budget(args) do
+    if Map.has_key?(args, "budget"),
+      do: EvoGit.TaskBudget.normalize(args["budget"]),
+      else: {:ok, nil}
   end
 
   # --- Argument handling ---

@@ -159,7 +159,7 @@ defmodule EvoGit.TaskRegistry do
   """
   @spec put_task_archive(map()) :: :ok | {:error, term()}
   def put_task_archive(entry) do
-    store = archive_store()
+    store = task_store()
 
     StoreGuard.write("put_task_archive", fn ->
       EvoGit.Store.put_task_archive(store, entry)
@@ -491,7 +491,8 @@ defmodule EvoGit.TaskRegistry do
       _known_or_absent ->
         # Admit before spawning or persisting: invalid explicit selections must
         # not enqueue work, and the stored opts must match the admitted selection.
-        with {:ok, opts} <- RuntimeOpts.admit_model_selection(opts, EvoGit.Config.resolve()) do
+        with {:ok, opts} <- EvoGit.TaskBudget.admit(opts),
+             {:ok, opts} <- RuntimeOpts.admit_model_selection(opts, EvoGit.Config.resolve()) do
           task_ref =
             Task.Supervisor.async_nolink(
               EvoGit.TaskSupervisor,
@@ -535,6 +536,14 @@ defmodule EvoGit.TaskRegistry do
             {:error, :store_unavailable} ->
               # StoreGuard already logged the fault — keep the task in memory.
               :ok
+          end
+
+          if budget = Keyword.get(opts, :budget) do
+            Process.send_after(
+              self(),
+              {:task_budget_deadline, task_id},
+              budget["max_duration_seconds"] * 1000
+            )
           end
 
           # Keep the runtime ref in-memory only
@@ -610,7 +619,7 @@ defmodule EvoGit.TaskRegistry do
       case safe_store_read("force_kill_task get_task_status", nil, fn ->
              EvoGit.Store.get_task_status(state.task_store, task_id)
            end) do
-        status when status in [:running, :cancelling] ->
+        status when status in [:running, :cancelling, :finalizing] ->
           case Map.get(state.task_refs, task_id) do
             %Task{pid: pid} = task_ref ->
               if Process.alive?(pid) do
@@ -1100,17 +1109,23 @@ defmodule EvoGit.TaskRegistry do
           opts: task_opts,
           finished_at: task_finished_at,
           lease_expires_at: task_lease_expires_at
-        } ->
+        } = task_info ->
           # Final-result force-mapping for graceful cancellation: a task whose
           # CURRENT stored status is :cancelling that reaches a terminal phase
           # (the wrapper completed/failed during the grace period) must always
           # be persisted as :cancelled — never :completed/:failed. Everything
           # else (result/usage write, terminal bookkeeping) flows
           # through untouched, so intermediate result data is PRESERVED.
+          budget_error = Map.get(task_info, :error)
+
           status =
-            if task_status == :cancelling and status in [:completed, :failed],
-              do: :cancelled,
-              else: status
+            cond do
+              task_status == :cancelling and status in [:completed, :failed] -> :cancelled
+              status == :completed and match?(%{source: :task_budget}, budget_error) -> :failed
+              true -> status
+            end
+
+          error = error || budget_error
 
           if task_status in [:completed, :failed, :cancelled] and
                status in [:completed, :failed, :cancelled] and
@@ -1362,7 +1377,8 @@ defmodule EvoGit.TaskRegistry do
   # is published by `init/1` into the app-owned `@store_table`; an instance that
   # never published (registry not started yet / already gone) falls back to the
   # default store, which is what `init/1` defaults `:task_store` to.
-  defp archive_store do
+  @doc "Returns the store owned by the current registry instance without calling its mailbox."
+  def task_store do
     registry = server()
 
     case :ets.whereis(@store_table) do
@@ -1377,7 +1393,7 @@ defmodule EvoGit.TaskRegistry do
     end
   end
 
-  # Publishes `server_name => task_store` for `archive_store/0`. Never raises: a
+  # Publishes `server_name => task_store` for `task_store/0`. Never raises: a
   # missing table (a registry started outside the `:evo_git` application, e.g. a
   # bare `start_link/1` in a script) only means archive writes target the
   # default store — it must not crash a registry boot.
@@ -1844,6 +1860,42 @@ defmodule EvoGit.TaskRegistry do
   # (the owning instance is gone). This fires once (scheduled in init after the
   # lease duration) and does NOT reschedule itself — any new foreign instance
   # performs its own pair of checks on its own startup.
+  @impl true
+  def handle_info({:task_budget_deadline, id}, state) do
+    case EvoGit.Store.get_task_status(state.task_store, id) do
+      status when status in [:running, :finalizing] ->
+        EvoGit.Store.update_task_columns(state.task_store, id,
+          error:
+            Diagnostics.failure_error(:timeout, :task_budget, "Task execution budget exhausted")
+        )
+
+        next =
+          if status == :running do
+            {:reply, _, updated} = handle_call({:cancel_task, id}, nil, state)
+            updated
+          else
+            state
+          end
+
+        Process.send_after(self(), {:task_budget_escalate, id}, 60_000)
+        {:noreply, next}
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
+  def handle_info({:task_budget_escalate, id}, state) do
+    case EvoGit.Store.get_task_status(state.task_store, id) do
+      status when status in [:running, :cancelling, :finalizing] ->
+        {:reply, _, next} = handle_call({:force_kill_task, id}, nil, state)
+        {:noreply, next}
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
   @impl true
   def handle_info(:lease_sweep, state) do
     owned_ids = MapSet.new(Map.keys(state.task_refs))

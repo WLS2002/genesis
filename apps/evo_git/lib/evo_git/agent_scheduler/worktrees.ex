@@ -78,6 +78,12 @@ defmodule EvoGit.AgentScheduler.Worktrees do
          :ok <-
            create_worktree(agent_id, repo_root, worktree_path, spec, branch_name, source_path),
          {:ok, _commit_sha} <- assign_and_prepare_worktree(agent_id, worktree_path, repo_root) do
+      EvoGit.AgentScheduler.WorktreeRetention.record(repo_root, worktree_path, branch_name, %{
+        task_id: meta.task_id,
+        agent_id: agent_id,
+        retained: false
+      })
+
       # Run the worktree init script only for the primary repo (foreign
       # repos are independent and should not inherit the primary repo's
       # init script).
@@ -345,7 +351,7 @@ defmodule EvoGit.AgentScheduler.Worktrees do
         current_commit: commit_sha
       }
 
-      Store.put_agent_state(agent_id, %AgentState{agent_state | phylo_node: wt_phylo_node})
+      Store.batch_update_agent(agent_id, phylo_node: wt_phylo_node)
 
       {:ok, commit_sha}
     else
