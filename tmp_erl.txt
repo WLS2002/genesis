@@ -1,9 +1,0 @@
-﻿bin
-doc
-erts-17.1.1
-INSTALL.txt
-installer.sha256
-lib
-releases
-usr
-vc_redist.exe

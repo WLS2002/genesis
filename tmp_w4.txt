@@ -1,8 +1,0 @@
-﻿cmd : File Not Found
-At line:1 char:268
-+ ... coding utf8 tmp_w3.txt; cmd /c "dir /b C:\Program Files" 2>&1 | Out-F ...
-+                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    + CategoryInfo          : NotSpecified: (File Not Found:String) [], RemoteException
-    + FullyQualifiedErrorId : NativeCommandError
- 
-File Not Found

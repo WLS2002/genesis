@@ -1,6 +1,0 @@
-﻿bin
-dl
-elixir
-erl
-share
-state

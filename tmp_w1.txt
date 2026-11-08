@@ -1,3 +1,0 @@
-﻿C:\Users\cvgcv\AppData\Local\Genesis\source-build\erts-17.1.1\bin\erl
-C:\Users\cvgcv\AppData\Local\Genesis\source-build\erts-17.1.1\bin\erl.exe
-C:\Users\cvgcv\.local\erl\bin\erl.exe

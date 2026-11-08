@@ -1,9 +1,0 @@
-﻿elixir
-elixir.bat
-elixirc
-elixirc.bat
-iex
-iex.bat
-mix
-mix.bat
-mix.ps1

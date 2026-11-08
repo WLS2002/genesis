@@ -1,4 +1,0 @@
-﻿bin
-erts-17.1.1
-lib
-releases

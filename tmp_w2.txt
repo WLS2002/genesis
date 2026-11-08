@@ -1,3 +1,0 @@
-﻿C:\Users\cvgcv\.local\elixir\bin\mix
-C:\Users\cvgcv\.local\elixir\bin\mix.bat
-C:\Users\cvgcv\AppData\Local\Microsoft\WindowsApps\mix.bat
