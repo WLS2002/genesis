@@ -161,6 +161,29 @@ defmodule EvoGit.AgentScheduler.Worktrees do
   # retried via WorktreeRetry; never raises (runs inside the offloaded create
   # task).
   defp destroy_leftovers(worktree_path, repo_root, branch_name) do
+    case EvoGit.AgentScheduler.WorktreeRetention.disposition(
+           worktree_path,
+           repo_root,
+           branch_name
+         ) do
+      {:retain, reason} ->
+        EvoGit.AgentScheduler.WorktreeRetention.retain(
+          repo_root,
+          worktree_path,
+          branch_name,
+          reason
+        )
+
+        {:error,
+         {:worktree_create_failed,
+          "Recoverable work exists at #{worktree_path} (#{reason}); preserve it before retrying."}}
+
+      :discard ->
+        discard_leftovers(worktree_path, repo_root, branch_name)
+    end
+  end
+
+  defp discard_leftovers(worktree_path, repo_root, branch_name) do
     case WorktreeRetry.rm_rf_retry(worktree_path) do
       {:ok, _} ->
         # Dir is gone — safe to prune stale registrations and delete the

@@ -418,28 +418,9 @@ defmodule EvoGit.AgentScheduler.WorktreeManager do
     else
       Logger.info("WorktreeManager: Initializing worktree directory at #{worker_base}")
 
-      if primary? do
-        # Use non-bang variant — when the scheduler crashes and restarts while
-        # agents from the previous instance are still running, the workers
-        # directory may be in use and rm_rf can fail with :eexist (or other
-        # errors). Log a warning and continue — mkdir_p on the next line is a
-        # no-op since the directory already exists. Transient failures
-        # (Windows file locking, anti-virus scans) are retried first.
-        case WorktreeRetry.rm_rf_retry(worker_base) do
-          {:ok, _} ->
-            :ok
-
-          {:error, reason, path} ->
-            Logger.warning(
-              "WorktreeManager: Could not remove worker directory #{worker_base}: " <>
-                "#{inspect(reason)} at #{path} — continuing with existing directory"
-            )
-        end
-
-        # Clean up orphaned evogit-agent branches from previous runs — PRIMARY
-        # repos only: foreign repos may carry real task branches.
-        clean_orphaned_branches(repo_root)
-      end
+      # Keep previous runs' directories and refs. They may contain the only
+      # copy of unfinished work; per-worktree cleanup checks retention.
+      _ = primary?
 
       WorktreeRetry.retry_on_transient(fn -> Git.prune_worktrees(repo_root) end)
 
@@ -512,6 +493,13 @@ defmodule EvoGit.AgentScheduler.WorktreeManager do
     case Store.get_agent_state(agent_id) do
       {:ok, agent_state} ->
         branch_name = Worktrees.branch_name(meta.task_number, agent_state.task_local_id)
+
+        EvoGit.AgentScheduler.WorktreeRetention.record(repo_root, worktree_path, branch_name, %{
+          task_id: meta.task_id,
+          agent_id: agent_id,
+          retained: false
+        })
+
         ref = Process.monitor(agent_pid)
 
         state = %{
@@ -701,8 +689,32 @@ defmodule EvoGit.AgentScheduler.WorktreeManager do
     # outlive it — a still-running job would hold the dir open and break rm_rf.
     safe_reap(worktree_path)
 
+    case EvoGit.AgentScheduler.WorktreeRetention.disposition(
+           worktree_path,
+           repo_root,
+           branch_name
+         ) do
+      {:retain, reason} ->
+        EvoGit.AgentScheduler.WorktreeRetention.retain(
+          repo_root,
+          worktree_path,
+          branch_name,
+          reason
+        )
+
+        Logger.info("Keeping recoverable worktree #{worktree_path}: #{reason}")
+
+      :discard ->
+        discard_worktree(worktree_path, repo_root, branch_name)
+    end
+
+    :ok
+  end
+
+  defp discard_worktree(worktree_path, repo_root, branch_name) do
     case WorktreeRetry.rm_rf_retry(worktree_path) do
       {:ok, _} ->
+        EvoGit.AgentScheduler.WorktreeRetention.forget(repo_root, worktree_path)
         # Dir is gone — safe to prune stale registrations and delete the
         # branch.
         WorktreeRetry.retry_on_transient(fn -> Git.prune_worktrees(repo_root) end)
@@ -751,27 +763,6 @@ defmodule EvoGit.AgentScheduler.WorktreeManager do
 
         :ok
     end
-  end
-
-  # Cleans up orphaned `evogit-agent-*` branches from previous runs.
-  # Matches all branches with the `evogit-agent-` prefix and deletes each one.
-  # Called during initialization to prevent stale branches from accumulating.
-  defp clean_orphaned_branches(repo_root) do
-    case Git.list_branches(repo_root, "evogit-agent-*") do
-      {:ok, branches} ->
-        Enum.each(branches, fn branch ->
-          Logger.info("WorktreeManager: Cleaning up orphaned branch #{branch}")
-          Worktrees.delete_branch_tolerant(repo_root, branch)
-        end)
-
-      {:error, {tag, output}} ->
-        Logger.warning(
-          "WorktreeManager: Failed to list evogit-agent-* branches for cleanup: " <>
-            "{#{inspect(tag)}, #{inspect(output)}}"
-        )
-    end
-
-    :ok
   end
 
   # --- Crash-restart re-monitoring (Bug 3) ---
