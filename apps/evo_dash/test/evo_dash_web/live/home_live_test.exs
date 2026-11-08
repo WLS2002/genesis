@@ -542,8 +542,10 @@ defmodule EvoDashWeb.HomeLiveTest do
       assert length(reflect) == 1
       task = hd(reflect)
       assert opt(task, :mode) == "reflect"
+
       assert opt(task, :objective) ==
                "## Workspace\npath: " <> @test_workspace <> "\n\nNew message: hello genesis"
+
       assert opt(task, :path) == nil
       refute has_opt?(task, :path)
       refute has_opt?(task, "path")
@@ -604,7 +606,9 @@ defmodule EvoDashWeb.HomeLiveTest do
         |> Enum.filter(&(&1.type == :reflect))
 
       assert opt(task, :objective) ==
-               "## Workspace\npath: " <> @test_workspace <> "\n\n" <>
+               "## Workspace\npath: " <>
+                 @test_workspace <>
+                 "\n\n" <>
                  "Previous conversation:\nUser: hello\nNew message: what is genesis?"
 
       cleanup_task_on_exit(task.id)
