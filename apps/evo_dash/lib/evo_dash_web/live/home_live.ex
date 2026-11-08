@@ -41,6 +41,7 @@ defmodule EvoDashWeb.HomeLive do
 
   alias EvoDashWeb.HomeLive.{
     AgentStream,
+    ApprovalWorkflow,
     ChatState,
     Messages,
     ModelSelect,
@@ -49,6 +50,9 @@ defmodule EvoDashWeb.HomeLive do
   }
 
   alias EvoDashWeb.LiveHooks.NodeAware
+  alias EvoDashWeb.LLMSelection
+
+  import EvoDashWeb.LLMSelectionComponents, only: [llm_selection: 1]
 
   import EvoDashWeb.HomeLive.ChatMessages
   import EvoDashWeb.HomeLive.ApprovalCard
@@ -78,33 +82,29 @@ defmodule EvoDashWeb.HomeLive do
         <div class="shrink-0 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-base-300 px-3 pt-3 pb-3 sm:px-4 sm:pt-4">
           <div class="min-w-0 basis-full sm:basis-auto sm:flex-1">
             <h1 class="text-base font-semibold truncate">
-              <%!-- zh_CN: "与 Genesis 对话" --%>{gettext("Chat with Genesis")}
+              <%!-- zh_CN: Genesis Assistant 是此对话助手的名称 --%>{gettext(
+                "Genesis Assistant"
+              )}
             </h1>
           </div>
-          <%= if @model_profiles != [] do %>
-            <select
-              name="model_id"
-              phx-change="select_chat_model"
-              aria-label={gettext("Chat model")}
-              class="min-w-0 flex-1 sm:flex-none sm:max-w-44 truncate rounded-lg border border-base-300 bg-base-100 px-3 py-2 text-sm font-medium text-base-content/70 hover:border-primary-standalone/40 hover:bg-base-200/70 focus:outline-none focus:ring-2 focus:ring-primary-standalone/20"
-            >
-              <%!-- zh_CN: 自动选择模型 — 配置了模型选择脚本时按规则/脚本自动选择，否则使用默认模型 --%>
-              <option value="" selected={@selected_model_id in [nil, ""]}>
-                <%= if @model_selection_enabled do %>
-                  <%!-- zh_CN: Auto → "自动"（按模型选择规则/脚本自动选择模型） --%>
-                  {gettext("Auto (by rules)")}
-                <% else %>
-                  <%!-- zh_CN: Auto → "自动"（未配置模型选择脚本，使用默认模型） --%>
-                  {gettext("Auto")}
-                <% end %>
-              </option>
-              <%= for profile <- @model_profiles do %>
-                <option value={profile.id} selected={@selected_model_id == profile.id}>
-                  {profile.id}
-                </option>
-              <% end %>
-            </select>
-          <% end %>
+          <form id="chat-llm-selection-form" class="basis-full order-last">
+            <.llm_selection
+              id="chat-llm-selection"
+              provider_profiles={@provider_profiles}
+              model_selections={@model_selections}
+              model_spec={@model_spec || %{}}
+              show_auto_option={@model_selection_enabled}
+              disabled={@model_select_loading or is_nil(@model_snapshot)}
+              compact
+            />
+          </form>
+          <p
+            :if={@model_select_load_error || @model_selection_error}
+            role="alert"
+            class="basis-full order-last text-xs text-error"
+          >
+            {gettext("Model selection is unavailable. Choose a valid model or reconnect to the node.")}
+          </p>
           <button
             type="button"
             phx-click="new_chat"
@@ -144,18 +144,56 @@ defmodule EvoDashWeb.HomeLive do
           <% end %>
         </div>
 
-        <!-- Pending command approvals (security levels 2 & 3): the reflect
-             agent is BLOCKED mid-turn on a run_command approval until the user
-             decides. Render one ApprovalCard per pending request, pinned
-             between the messages scroller and the composer so they stay
-             visible while the transcript scrolls. The area scrolls internally
-             if several requests ever pend at once. -->
+        <!-- Pending evaluator and legacy command approvals block the reflect
+             agent until the user decides. Cards stay visible while a response
+             is in flight and on failure, between transcript and composer. -->
         <%= if @pending_approvals != [] do %>
           <div class="shrink-0 max-h-[min(11rem,25dvh)] overflow-y-auto overscroll-contain scrollbar-thin">
             <%= for request <- @pending_approvals do %>
-              <.approval_card request={request} />
+              <.approval_card
+                request={request}
+                busy={ApprovalWorkflow.busy?(assigns, request.request_id)}
+              />
             <% end %>
           </div>
+        <% end %>
+
+        <%= case @approval_error do %>
+          <% {:recovery, reason} -> %>
+            <div
+              id="approval-recovery-error"
+              role="alert"
+              class="shrink-0 rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm text-base-content"
+            >
+              <p>
+                {gettext("Could not load pending approvals: %{reason}", reason: inspect(reason))}
+              </p>
+              <p class="mt-1 text-base-content/70">
+                {gettext("Existing requests are kept. Retry to check for pending approvals.")}
+              </p>
+              <button
+                type="button"
+                phx-click="retry_approvals"
+                disabled={@approval_recovering}
+                class="btn btn-sm btn-outline mt-2"
+              >
+                {gettext("Retry approvals")}
+              </button>
+            </div>
+          <% {:response, request_id, reason} -> %>
+            <%= if Enum.any?(@pending_approvals, &(&1.request_id == request_id)) do %>
+              <div
+                id="approval-response-error"
+                role="alert"
+                class="shrink-0 rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm text-base-content"
+              >
+                <p>{gettext("Failed to respond: %{reason}", reason: inspect(reason))}</p>
+                <p class="mt-1 text-base-content/70">
+                  {gettext("The request is still pending. Use its decision buttons to try again.")}
+                </p>
+              </div>
+            <% end %>
+          <% _ -> %>
         <% end %>
 
         <!-- Composer: pinned bottom, outside the messages scroller -->
@@ -172,9 +210,9 @@ defmodule EvoDashWeb.HomeLive do
               phx-keydown="chat_keydown"
               phx-keyup="chat_keyup"
               disabled={@chat_status != :idle or SourceGate.blocked?(assigns)}
-              placeholder={gettext("Message Genesis…")}
+              placeholder={gettext("Message Genesis Assistant…")}
               rows="1"
-              aria-label={gettext("Message Genesis…")}
+              aria-label={gettext("Message Genesis Assistant…")}
               class="w-full min-w-0 min-h-[46px] max-h-[min(10rem,25dvh)] resize-y bg-transparent px-4 py-3 text-base leading-relaxed placeholder:text-base-content/50 focus:outline-none disabled:opacity-50"
             ></textarea>
             <!-- Send → Stop morph: exactly one button is visible at a time; both
@@ -182,7 +220,10 @@ defmodule EvoDashWeb.HomeLive do
                  presence/disabled state remains assertable on idle. -->
             <button
               type="submit"
-              disabled={@chat_status != :idle or SourceGate.blocked?(assigns)}
+              disabled={
+                @chat_status != :idle or SourceGate.blocked?(assigns) or
+                  is_nil(@model_snapshot) or not is_nil(@model_selection_error)
+              }
               class={"help-send-btn flex size-9 shrink-0 items-center justify-center rounded-full bg-primary text-primary-content transition hover:opacity-90 active:scale-95 disabled:opacity-40 disabled:pointer-events-none " <> if(@chat_status == :running, do: "hidden", else: "")}
             >
               <.icon name="hero-paper-airplane" class="size-4" />
@@ -204,8 +245,8 @@ defmodule EvoDashWeb.HomeLive do
             )}
             <%= if @chat_status == :idle and @transcript == [] do %>
               <br />
-              <%!-- zh_CN: "Genesis 可能会出错，请核实重要信息。" --%>{gettext(
-                "Genesis can make mistakes. Verify important information."
+              <%!-- zh_CN: Genesis Assistant 可能会出错，请核实重要信息。 --%>{gettext(
+                "Genesis Assistant can make mistakes. Verify important information."
               )}
             <% end %>
           </div>
@@ -234,16 +275,16 @@ defmodule EvoDashWeb.HomeLive do
       if connected?(socket) do
         Phoenix.PubSub.subscribe(EvoGit.PubSub, "tasks")
         Phoenix.PubSub.subscribe(EvoGit.PubSub, "agents")
-        # Run-command approvals (security levels 2 & 3): the reflect agent is
-        # blocked mid-turn until the user decides on the request card.
+        # Evaluator and legacy command approvals both use this topic. Recovery
+        # starts only after this subscription, chat restoration and node resolution.
         Phoenix.PubSub.subscribe(EvoGit.PubSub, "approvals")
       end
 
       socket =
         socket
         |> assign(base_assigns())
+        |> ApprovalWorkflow.init()
         |> attach_chat()
-        |> assign_model_select()
 
       {:ok, socket}
     end
@@ -273,14 +314,23 @@ defmodule EvoDashWeb.HomeLive do
       # text) view instead of the markdown render. Never persisted — entries
       # are cleared with the transcript on reset_chat.
       raw_entry_ids: MapSet.new(),
-      # Ephemeral UI state: pending run-command approval requests (security
-      # levels 2 & 3) for THIS chat's task/agent, each waiting for the user's
-      # Confirm/Deny on its ApprovalCard. Never persisted — a page refresh
-      # clears them (the backend resolves stragglers with a timeout
-      # :approval_resolved broadcast); cleared on reset_chat too.
-      pending_approvals: [],
-      model_profiles: [],
+      # The last approval scope reconciled on this connection. Recovery starts
+      # after handle_params resolves the node, never against mount's local seed.
+      # ApprovalWorkflow owns all ephemeral cards, response tokens and errors.
+      approval_context: nil,
+      provider_profiles: [],
+      model_selections: [],
+      model_spec: nil,
+      model_selection_scope: nil,
+      model_selection_error: nil,
+      model_selection_restore: nil,
+      model_selection_resolved: false,
       model_selection_enabled: false,
+      # Config snapshots/bundles are server-only and never enter ChatState.
+      model_snapshot: nil,
+      model_selection_bundle: nil,
+      model_select_loading: false,
+      model_select_load_error: nil,
       # Monotonic stale-guard for the ASYNC remote model-profile load (a remote
       # node resolves its profiles via an `:erpc` config fetch, so the load is
       # NEVER run in the LiveView process — see assign_model_select/1). Monotonic
@@ -302,51 +352,131 @@ defmodule EvoDashWeb.HomeLive do
     }
   end
 
-  # Loads the node's model profiles + model-selection-script state for the
-  # header model selector. Re-run on every handle_params so a `?node=` switch
-  # reloads for the resolved target. Only assigns `model_profiles` /
-  # `model_selection_enabled` — the `selected_model_id` pin (restored by
-  # ChatState, kept across new chats / node switches) is never touched here.
-  #
-  # The LiveView process NEVER blocks on a cross-node config fetch:
-  #
-  #   * LOCAL node (`nil` on a fresh socket or `node()`), including a PENDING
-  #     remote context (whose assigns still point at the local node) — the
-  #     config is a local file read, so it stays synchronous.
-  #   * REMOTE node — a `get_resolved_config/1` `:erpc` to a node that may be
-  #     unreachable would block (and, on a call timeout, EXIT) this process.
-  #     Seed the cheap default `{[], false}` (the header select then renders no
-  #     selector) and, on a connected socket, spawn ONE supervised load with a
-  #     monotonic `:model_select_seq` stale-guard; the result lands in the
-  #     `{{:model_select_loaded, seq, node}, result}` handle_info clause
-  #     (`EvoDash.SafeCall.start/4` always sends `{tag, run(fun)}` — the tag
-  #     stays ONE nested tuple, never flattened).
+  # Only the resolved node may supply a snapshot. Pending targets must never
+  # read local config; every load invalidates earlier async results, including
+  # a switch between two pending targets that share the local node fallback.
   defp assign_model_select(socket) do
-    node = socket.assigns[:current_node] || node()
+    {_target_id, target_node} = selection_scope(socket)
+    seq = socket.assigns.model_select_seq + 1
 
-    if node in [nil, node()] do
-      {model_profiles, model_selection_enabled} = ModelSelect.load(node)
-
+    socket =
       assign(socket,
-        model_profiles: model_profiles,
-        model_selection_enabled: model_selection_enabled
+        model_select_seq: seq,
+        model_snapshot: nil,
+        model_selection_bundle: nil,
+        provider_profiles: [],
+        model_selections: [],
+        model_selection_enabled: false,
+        model_select_loading: false,
+        model_select_load_error: nil
       )
-    else
-      socket = assign(socket, model_profiles: [], model_selection_enabled: false)
 
-      # A dead render must not spawn a task that sends into a dying process.
-      if connected?(socket) do
-        seq = Map.get(socket.assigns, :model_select_seq, 0) + 1
+    cond do
+      pending_remote?(socket) ->
+        assign(socket, model_select_load_error: :remote_not_connected)
 
-        EvoDash.SafeCall.start(self(), {:model_select_loaded, seq, node}, fn ->
-          ModelSelect.load(node)
-        end)
+      target_node == node() ->
+        apply_model_snapshot(socket, ModelSelect.load(target_node))
 
-        assign(socket, model_select_seq: seq)
-      else
+      connected?(socket) ->
+        case EvoDash.SafeCall.start(self(), {:model_select_loaded, seq, target_node}, fn ->
+               ModelSelect.load(target_node)
+             end) do
+          {:ok, _pid} ->
+            assign(socket, model_select_loading: true)
+
+          {:error, reason} ->
+            # No result message is sent when the supervisor cannot start the task.
+            apply_model_snapshot(socket, {:error, reason})
+        end
+
+      true ->
         socket
-      end
     end
+  end
+
+  defp apply_model_snapshot(socket, {:ok, %{node: target_node} = snapshot}) do
+    if target_node == elem(selection_scope(socket), 1) and not pending_remote?(socket) do
+      bundle = LLMSelection.from_config(snapshot.config, snapshot.model_selection_enabled)
+
+      socket
+      |> assign(
+        model_snapshot: snapshot,
+        model_selection_bundle: bundle,
+        provider_profiles: bundle.provider_profiles,
+        model_selections: bundle.model_selections,
+        model_selection_enabled: bundle.model_selection_enabled,
+        model_select_loading: false,
+        model_select_load_error: nil
+      )
+      |> reconcile_model_selection()
+    else
+      socket
+    end
+  end
+
+  defp apply_model_snapshot(socket, {:error, reason}) do
+    assign(socket, model_select_loading: false, model_select_load_error: reason)
+  end
+
+  defp reconcile_model_selection(socket) do
+    # Malformed persisted specs remain visibly invalid until the user chooses
+    # again. Valid-but-stale choices are reconciled by the shared helper.
+    if socket.assigns.model_selection_error do
+      socket
+    else
+      candidate =
+        if is_nil(socket.assigns.model_spec),
+          do: socket.assigns.selected_model_id,
+          else: socket.assigns.model_spec
+
+      spec = LLMSelection.reconcile(socket.assigns.model_selection_bundle, candidate)
+
+      socket
+      |> assign(model_spec: spec, selected_model_id: nil)
+      |> persist_state()
+    end
+  end
+
+  defp update_model_selection(socket, operation, value) do
+    bundle = socket.assigns.model_selection_bundle
+
+    result =
+      if is_nil(bundle) or pending_remote?(socket) do
+        {:error, :model_selection_not_loaded}
+      else
+        apply(LLMSelection, operation, [bundle, socket.assigns.model_spec, value])
+      end
+
+    case result do
+      {:ok, spec} ->
+        {:noreply,
+         socket
+         |> assign(
+           model_spec: spec,
+           selected_model_id: nil,
+           model_selection_error: nil,
+           model_selection_scope: selection_scope(socket)
+         )
+         |> persist_state()}
+
+      {:error, _reason} ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           gettext("Choose a valid provider profile, model and reasoning effort.")
+         )}
+    end
+  end
+
+  defp selection_scope(socket) do
+    {socket.assigns[:current_node_id], socket.assigns[:current_node] || node()}
+  end
+
+  defp pending_remote?(socket) do
+    {target_id, target_node} = selection_scope(socket)
+    not is_nil(target_id) and target_node == node()
   end
 
   # Genesis-source availability check (LOCAL node only, connected socket only).
@@ -374,6 +504,7 @@ defmodule EvoDashWeb.HomeLive do
   @impl true
   def handle_params(params, _url, socket) do
     prev_node = socket.assigns[:current_node]
+    prev_node_id = socket.assigns[:current_node_id]
     socket = NodeAware.assign_node(socket, params)
 
     # Node switch: the old chat's task belongs to the old node. Start a NEW
@@ -385,20 +516,38 @@ defmodule EvoDashWeb.HomeLive do
     #   * fresh load on a different node — the restored chat carries the node
     #     it was created on (`:chat_node`); a mismatch means the chat is stale
     #     for the viewed node.
-    # `prev_node == nil` on the FIRST handle_params (mount → params) must NOT
-    # count as a switch: `assign_node` resolves local to `node()`, and wiping
-    # the just-restored chat there would defeat the persistence.
-    node_changed = prev_node != nil and socket.assigns[:current_node] != prev_node
+    # The first handle_params resolves the mount seed, not a user switch.
+    # Preserve a matching restored scope there; later target-id changes reset
+    # even if both targets currently share the same fallback BEAM node.
+    node_changed =
+      socket.assigns.model_selection_resolved and
+        (socket.assigns[:current_node] != prev_node or
+           socket.assigns[:current_node_id] != prev_node_id)
 
     chat_node_mismatch =
       socket.assigns[:chat_node] != nil and
         socket.assigns[:chat_node] != socket.assigns[:current_node]
 
+    scope = selection_scope(socket)
+    saved_selection = socket.assigns.model_selection_restore || socket.assigns
+
+    saved_scope =
+      if is_map(saved_selection), do: Map.get(saved_selection, :model_selection_scope)
+
+    selection_scope_mismatch = not is_nil(saved_scope) and saved_scope != scope
+
     socket =
-      if node_changed or chat_node_mismatch do
-        start_new_chat(socket)
-      else
-        socket
+      socket
+      |> assign(ChatState.restore_selection(saved_selection, scope))
+      |> assign(model_selection_restore: nil, model_selection_resolved: true)
+
+    socket =
+      cond do
+        node_changed or chat_node_mismatch or selection_scope_mismatch ->
+          start_new_chat(socket)
+
+        true ->
+          socket
       end
 
     # Re-load the model profiles / selection-script state for the RESOLVED
@@ -412,6 +561,9 @@ defmodule EvoDashWeb.HomeLive do
       # the page reacts to `?node=` switches). Local-node only + connected-only
       # (a dead render must not spawn a task that sends into a dying process).
       |> maybe_check_source()
+      # Subscriptions and restoration are complete, and the viewed node is
+      # resolved. This also reconciles reconnects routed here by NodeAware.
+      |> maybe_recover_approvals()
 
     {:noreply, socket}
   end
@@ -455,23 +607,19 @@ defmodule EvoDashWeb.HomeLive do
     end
   end
 
-  # Form-less phx-change on the header model select may arrive keyed either by
-  # the select's `name` ("model_id") or by the generic "value" — handle both.
-  # The empty "" (Auto option) normalizes to nil via ChatState.normalize_model_id/1.
   @impl true
-  def handle_event("select_chat_model", %{"model_id" => id}, socket) do
-    {:noreply,
-     socket
-     |> assign(selected_model_id: ChatState.normalize_model_id(id))
-     |> persist_state()}
+  def handle_event("select_provider_profile", %{"provider_profile_id" => id}, socket) do
+    update_model_selection(socket, :select_provider, id)
   end
 
   @impl true
-  def handle_event("select_chat_model", %{"value" => id}, socket) do
-    {:noreply,
-     socket
-     |> assign(selected_model_id: ChatState.normalize_model_id(id))
-     |> persist_state()}
+  def handle_event("select_model", %{"model" => model}, socket) do
+    update_model_selection(socket, :select_model, model)
+  end
+
+  @impl true
+  def handle_event("select_reasoning_effort", %{"reasoning_effort" => index}, socket) do
+    update_model_selection(socket, :select_reasoning_effort, index)
   end
 
   # Per-message raw/markdown toggle on an assistant entry (phx-click from the
@@ -578,56 +726,20 @@ defmodule EvoDashWeb.HomeLive do
     end
   end
 
-  # Command-approval decision (Confirm/Deny on an ApprovalCard — security
-  # levels 2 & 3). Validates the decision, resolves the target node from the
-  # pending request map (it may differ from the viewed node if the request
-  # raced a node switch), routes the response through the call-time
-  # :approval_responder seam, and OPTIMISTICALLY removes the card regardless
-  # of the outcome (the :approval_resolved broadcast is the backstop).
-  #
-  # The responder call runs OFF-PROCESS in an `EvoDash.SafeCall` supervised
-  # task: it may `:erpc` to a remote node, and a call to an unreachable node
-  # EXITS its caller (a `rescue` cannot catch an exit). The outcome lands in
-  # the `{{:approval_response_result, request_id, node}, result}` handle_info
-  # clause, which flashes a failed response and never crashes the page.
-  # (`EvoDash.SafeCall.start/4` always sends `{tag, run(fun)}`, so the tag —
-  # here a 3-tuple — stays nested as the message's first element.)
+  # Both evaluator and legacy command decisions use the same scoped async
+  # workflow. Keep the card busy until success; failures retain it for retry.
   @impl true
   def handle_event(
         "approval_response",
         %{"request_id" => request_id, "decision" => decision},
         socket
-      )
-      when decision in ["approve", "deny"] and is_binary(request_id) and request_id != "" do
-    pending =
-      case socket.assigns[:pending_approvals] do
-        list when is_list(list) -> list
-        _ -> []
-      end
+      ) do
+    {:noreply, ApprovalWorkflow.respond(socket, request_id, decision)}
+  end
 
-    # The request's OWN node wins when still pending; the viewed node is the
-    # fallback once the card is gone (double click / already resolved).
-    node =
-      case Enum.find(pending, &(Map.get(&1, :request_id) == request_id)) do
-        %{node: req_node} when not is_nil(req_node) -> req_node
-        _ -> socket.assigns[:current_node] || node()
-      end
-
-    # Call-time test seam (dashboard idiom — mirrors :review_merge_runner /
-    # :update_check_runner): tests inject `:approval_responder` to capture the
-    # args deterministically while the backend responder lands.
-    responder =
-      Application.get_env(
-        :evo_dash,
-        :approval_responder,
-        &EvoDash.NodeContext.approval_response/3
-      )
-
-    EvoDash.SafeCall.start(self(), {:approval_response_result, request_id, node}, fn ->
-      responder.(node, request_id, decision)
-    end)
-
-    {:noreply, assign(socket, pending_approvals: drop_approval(pending, request_id))}
+  @impl true
+  def handle_event("retry_approvals", _params, socket) do
+    {:noreply, recover_approvals(socket)}
   end
 
   # Missing params / invalid decision (or a blank request id) — no-op.
@@ -660,7 +772,7 @@ defmodule EvoDashWeb.HomeLive do
           agent_message_count: AgentStream.message_count(summary)
         )
 
-      {:noreply, socket |> persist_state() |> async_fetch_history()}
+      {:noreply, socket |> persist_state() |> async_fetch_history() |> maybe_recover_approvals()}
     else
       {:noreply, socket}
     end
@@ -703,40 +815,21 @@ defmodule EvoDashWeb.HomeLive do
     end
   end
 
-  # A run-command approval was requested by the reflect agent (security levels
-  # 2 & 3 — level 1 executes immediately and never broadcasts). Keep ONLY
-  # requests that belong to THIS chat's task/agent AND THIS node — everything
-  # else (other chats/tasks/agents, other nodes) is ignored. On match the
-  # request map is upserted into :pending_approvals (deduped by request_id — a
-  # duplicate REPLACES the earlier entry). Ephemeral UI state — never
-  # persisted.
+  # The workflow applies chat/source-node ownership and snapshot race guards
+  # for evaluator requests and legacy command approvals alike.
   @impl true
   def handle_info({:approval_requested, request}, socket) do
-    if own_request?(socket, request) do
-      pending =
-        case socket.assigns[:pending_approvals] do
-          list when is_list(list) -> list
-          _ -> []
-        end
-
-      {:noreply, assign(socket, pending_approvals: upsert_approval(pending, request))}
-    else
-      {:noreply, socket}
-    end
+    {:noreply, ApprovalWorkflow.requested(socket, request)}
   end
 
-  # An approval was resolved somewhere (approve/deny by the user, or
-  # :cancelled / :timed_out by the backend) — drop its card. Total: unknown
-  # request ids filter to a no-op.
+  @impl true
+  def handle_info({:approval_resolved, request_id, _decision, source_node}, socket) do
+    {:noreply, ApprovalWorkflow.resolved(socket, request_id, source_node)}
+  end
+
   @impl true
   def handle_info({:approval_resolved, request_id, _decision}, socket) do
-    pending =
-      case socket.assigns[:pending_approvals] do
-        list when is_list(list) -> list
-        _ -> []
-      end
-
-    {:noreply, assign(socket, pending_approvals: drop_approval(pending, request_id))}
+    {:noreply, ApprovalWorkflow.resolved(socket, request_id)}
   end
 
   @impl true
@@ -761,7 +854,8 @@ defmodule EvoDashWeb.HomeLive do
             agent_message_count: AgentStream.message_count(agent)
           )
 
-        {:noreply, socket |> persist_state() |> async_fetch_history()}
+        {:noreply,
+         socket |> persist_state() |> async_fetch_history() |> maybe_recover_approvals()}
       else
         # Agent not registered yet — wait for agent_registered / agents_updated
         # to retrigger the lookup.
@@ -862,73 +956,33 @@ defmodule EvoDashWeb.HomeLive do
     end
   end
 
-  # Command-approval response outcome (from the supervised responder task
-  # spawned by the approval_response event). `EvoDash.SafeCall.start/4` ALWAYS
-  # sends `{tag, run(fun)}`, so the message arrives as
-  # `{{:approval_response_result, request_id, node}, result}` — the tag is ONE
-  # nested 3-tuple, never flattened into the message. The card was already
-  # removed optimistically, so this only surfaces a FAILED response:
-  #
-  #   * `{:ok, :ok}` — the backend accepted the decision → no-op.
-  #   * `{:ok, {:error, reason}}` — the responder reported a failure (e.g. the
-  #     remote approval channel is down) → error flash.
-  #   * `{:error, reason}` — the guarded call EXITED / raised (an unreachable
-  #     node, a call timeout) → the same error flash.
-  #   * anything else — quiet no-op.
-  #
-  # The request id is deliberately NOT used as a filter: the card is gone by
-  # now, so a stale/late result for an already-resolved request must still be
-  # allowed to report its failure. TOTAL: every shape keeps the LiveView alive.
+  # SafeCall preserves tuple tags as ONE nested element. The workflow rejects
+  # stale scopes/tokens and keeps cards on recovery or response failures.
   @impl true
-  def handle_info({{:approval_response_result, _request_id, _node}, result}, socket) do
-    case result do
-      {:ok, :ok} ->
-        {:noreply, socket}
-
-      {:ok, {:error, reason}} ->
-        {:noreply,
-         put_flash(
-           socket,
-           :error,
-           # zh_CN: 审批响应失败（本地/远程审批通道出错；卡片已收起，超时会兜底清理）
-           gettext("Failed to respond: %{reason}", reason: inspect(reason))
-         )}
-
-      {:error, reason} ->
-        {:noreply,
-         put_flash(
-           socket,
-           :error,
-           # zh_CN: 审批响应失败（本地/远程审批通道出错；卡片已收起，超时会兜底清理）
-           gettext("Failed to respond: %{reason}", reason: inspect(reason))
-         )}
-
-      _other ->
-        {:noreply, socket}
-    end
+  def handle_info({{:approval_pending_loaded, _seq, _scope} = tag, result}, socket) do
+    {:noreply, ApprovalWorkflow.recovered(socket, tag, result)}
   end
 
-  # Async model-profile load for a REMOTE node (from assign_model_select/1).
-  # The message is `{{:model_select_loaded, seq, node}, result}` — the tag stays
-  # ONE nested tuple (that is exactly what `EvoDash.SafeCall.start/4` sends).
-  # Stale-guarded EXACTLY like the chat fetches: dropped when the viewed node
-  # changed since the spawn or a newer load was started (monotonic
-  # `:model_select_seq`). A well-shaped `{:ok, {profiles, enabled}}` assigns
-  # both; an error / unexpected shape keeps the cheap `{[], false}` defaults the
-  # caller already assigned — never crashes and never clears the pinned model
-  # (`selected_model_id` is ChatState's, untouched here).
   @impl true
-  def handle_info({{:model_select_loaded, seq, node}, result}, socket) do
-    if node != socket.assigns[:current_node] or
-         seq < Map.get(socket.assigns, :model_select_seq, 0) do
+  def handle_info({{:approval_workflow_response, _seq, _scope, _id} = tag, result}, socket) do
+    {:noreply, ApprovalWorkflow.responded(socket, tag, result)}
+  end
+
+  # SafeCall keeps the ModelSelect result nested inside its own tagged result.
+  # Sequence equality also rejects a stale result for a different target id
+  # whose resolved BEAM node happens to be the same.
+  @impl true
+  def handle_info({{:model_select_loaded, seq, target_node}, result}, socket) do
+    if target_node != elem(selection_scope(socket), 1) or
+         seq != socket.assigns.model_select_seq or pending_remote?(socket) do
       {:noreply, socket}
     else
       case result do
-        {:ok, {profiles, enabled}} when is_list(profiles) and is_boolean(enabled) ->
-          {:noreply, assign(socket, model_profiles: profiles, model_selection_enabled: enabled)}
+        {:ok, snapshot_result} ->
+          {:noreply, apply_model_snapshot(socket, snapshot_result)}
 
-        _other ->
-          {:noreply, socket}
+        {:error, reason} ->
+          {:noreply, apply_model_snapshot(socket, {:error, reason})}
       end
     end
   end
@@ -959,15 +1013,25 @@ defmodule EvoDashWeb.HomeLive do
   # SourceGate.blocked?/1); the textarea/Send button are disabled in the same
   # state, so this is the defensive backstop for the Enter-key path.
   defp send_chat(socket, text) do
-    if SourceGate.blocked?(socket.assigns) do
-      {:noreply,
-       put_flash(
-         socket,
-         :error,
-         gettext("Download the Genesis source before sending a message.")
-       )}
-    else
-      do_send_chat(socket, text)
+    cond do
+      pending_remote?(socket) ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           gettext("Connect to the remote node before sending a message.")
+         )}
+
+      SourceGate.blocked?(socket.assigns) ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           gettext("Download the Genesis source before sending a message.")
+         )}
+
+      true ->
+        do_send_chat(socket, text)
     end
   end
 
@@ -987,80 +1051,94 @@ defmodule EvoDashWeb.HomeLive do
             :empty -> text
           end
 
-        # Optimistic bubbles: the user message + an empty streaming assistant
-        # bubble (pulsing dots) appear immediately.
-        transcript =
-          socket.assigns[:transcript]
-          |> Transcript.append(Transcript.entry(:user, text))
-          |> Transcript.put_streaming_text("")
+        # Validate before touching the transcript/draft. A missing, stale or
+        # wrong-node snapshot must not create a bubble or silently submit Auto.
+        case ModelSelect.task_opts(
+               socket.assigns.model_snapshot,
+               socket.assigns,
+               selection_scope(socket),
+               mode: "reflect",
+               objective: objective
+             ) do
+          {:ok, task_opts} ->
+            start_chat(socket, text, task_opts)
 
-        socket =
-          assign(socket,
-            transcript: transcript,
-            chat_draft: "",
-            chat_status: :running,
-            chat_node: socket.assigns[:current_node] || node()
-          )
+          {:error, _reason} ->
+            {:noreply,
+             put_flash(socket, :error, gettext("Choose a valid model before sending a message."))}
+        end
+      end
+    end
+  end
 
-        # Guarded per-click mutation (dashboard convention): starts the
-        # repo-less reflect task on the viewed node. NO :path key. The pinned
-        # model (if any) is threaded via ModelSelect.task_opts/2 — :model_id +
-        # :model_id_locked when the header selector pinned a profile, nothing
-        # on Auto (the runtime's model-selection script or default decides).
-        #
-        # `EvoDash.SafeCall.run/1` normalizes the store/RPC outcome: an
-        # unreachable remote node EXITS its caller (an `:erpc` failure a rescue
-        # cannot catch), so it becomes `{:error, reason}` and lands on the
-        # "Failed to start the task" bubble instead of crashing the page.
-        result =
-          case EvoDash.SafeCall.run(fn ->
-                 EvoDash.NodeContext.start_task(
-                   socket.assigns[:current_node] || node(),
-                   :reflect,
-                   ModelSelect.task_opts(socket.assigns[:selected_model_id],
-                     mode: "reflect",
-                     objective: objective
-                   )
-                 )
-               end) do
-            {:ok, start_result} -> start_result
-            {:error, reason} -> {:error, reason}
-          end
+  defp start_chat(socket, text, task_opts) do
+    # Optimistic bubbles: the user message + an empty streaming assistant
+    # bubble (pulsing dots) appear immediately.
+    transcript =
+      socket.assigns[:transcript]
+      |> Transcript.append(Transcript.entry(:user, text))
+      |> Transcript.put_streaming_text("")
 
-        case result do
-          {:ok, _task} ->
-            case AgentStream.task_id_from_start(result) do
-              {:ok, id} ->
-                socket =
-                  socket
-                  |> assign(chat_task_id: id, chat_task_status: :pending)
-                  |> persist_state()
-                  |> async_lookup_agent()
+    socket =
+      assign(socket,
+        transcript: transcript,
+        chat_draft: "",
+        chat_status: :running,
+        chat_node: socket.assigns[:current_node] || node()
+      )
 
-                {:noreply, socket}
+    # Guarded per-click mutation on the viewed node. Options were validated
+    # against its ephemeral snapshot before the optimistic transcript update.
+    # No :path or legacy :model_id is submitted.
+    # `EvoDash.SafeCall.run/1` normalizes the store/RPC outcome: an
+    # unreachable remote node EXITS its caller (an `:erpc` failure a rescue
+    # cannot catch), so it becomes `{:error, reason}` and lands on the
+    # "Failed to start the task" bubble instead of crashing the page.
+    result =
+      case EvoDash.SafeCall.run(fn ->
+             EvoDash.NodeContext.start_task(
+               socket.assigns[:current_node] || node(),
+               :reflect,
+               task_opts
+             )
+           end) do
+        {:ok, start_result} -> start_result
+        {:error, reason} -> {:error, reason}
+      end
 
-              {:error, :no_task_id} ->
-                socket =
-                  socket
-                  |> finalize_streaming(gettext("Failed to start the task: no task id returned"))
-                  |> assign(:chat_status, :idle)
-                  |> persist_state()
-
-                {:noreply, socket}
-            end
-
-          {:error, reason} ->
+    case result do
+      {:ok, _task} ->
+        case AgentStream.task_id_from_start(result) do
+          {:ok, id} ->
             socket =
               socket
-              |> finalize_streaming(
-                gettext("Failed to start the task: %{reason}", reason: inspect(reason))
-              )
+              |> assign(chat_task_id: id, chat_task_status: :pending)
+              |> persist_state()
+              |> async_lookup_agent()
+              |> maybe_recover_approvals()
+
+            {:noreply, socket}
+
+          {:error, :no_task_id} ->
+            socket =
+              socket
+              |> finalize_streaming(gettext("Failed to start the task: no task id returned"))
               |> assign(:chat_status, :idle)
               |> persist_state()
 
             {:noreply, socket}
         end
-      end
+
+      {:error, reason} ->
+        socket =
+          socket
+          |> finalize_streaming(
+            gettext("Failed to start the task: %{reason}", reason: inspect(reason))
+          )
+          |> assign(:chat_status, :idle)
+          |> persist_state()
+
+        {:noreply, socket}
     end
   end
 
@@ -1286,19 +1364,22 @@ defmodule EvoDashWeb.HomeLive do
   # can match) and re-enables input, keeping the transcript AND the final
   # `:chat_task_status` badge (and thought process) visible on the card.
   defp clear_task_refs(socket) do
-    assign(socket,
+    socket
+    |> assign(
       chat_task_id: nil,
       chat_agent_id: nil,
       agent_message_count: nil,
       chat_status: :idle
     )
+    |> ApprovalWorkflow.init()
   end
 
   # Full live-chat reset (New chat / node switch): clears everything including
   # the transcript. The persisted chat (if any) is untouched —
   # `start_new_chat/1` owns creating + persisting the fresh empty chat.
   defp reset_chat(socket) do
-    assign(socket,
+    socket
+    |> assign(
       transcript: Transcript.new(),
       chat_draft: "",
       chat_status: :idle,
@@ -1310,68 +1391,41 @@ defmodule EvoDashWeb.HomeLive do
       chat_node: nil,
       chat_fetch_seq: 0,
       chat_task_fetch_seq: 0,
-      # The user's pinned model choice SURVIVES a new chat (and a node switch):
-      # only a fresh mount with no restored chat seeds `selected_model_id: nil`
-      # (base_assigns). ChatState persists/restores it per chat, so the choice
-      # keeps threading into sends after a new chat.
-      #
-      # `raw_entry_ids` (per-entry raw-view flags) IS cleared here — the
-      # transcript entries it refers to are gone with the reset.
+      # Selection survives New chat only within its resolved target scope;
+      # handle_params clears cross-node/target selections before this reset.
+      # Per-entry raw-view flags are cleared with their transcript entries.
       raw_entry_ids: MapSet.new(),
-      # Pending approval cards belong to the OLD chat's task — cleared here
-      # too (the backend resolves stragglers with a timeout broadcast).
-      pending_approvals: []
+      approval_context: nil
     )
+    |> ApprovalWorkflow.init()
   end
 
-  # Own-request filter for `{:approval_requested, request}` broadcasts. A
-  # request belongs to this chat when it carries a usable request_id AND
-  # (its task_id matches OUR chat task OR its agent_id matches OUR chat
-  # agent) AND its node matches the chat's node (the chat's own `:chat_node`,
-  # falling back to the viewed node; a nil request node matches everything —
-  # the backend always stamps it, but stay lenient). Type tolerance: agent
-  # ids may be integers in the core while the request contract says strings →
-  # compared via `to_string/1`; task ids are binaries on both sides
-  # (`chat_task_id` is normalized to a binary by `ChatState.restore/1` and
-  # `AgentStream.task_id_from_start/1` only accepts binaries). Total — the
-  # assigns may be nil/absent on fresh sockets.
-  defp own_request?(socket, request) do
-    is_map(request) and
-      is_binary(Map.get(request, :request_id)) and
-      (own_task_request?(socket, request) or own_agent_request?(socket, request)) and
-      own_node_request?(socket, request)
+  # Compare only chat/node refs, not draft/history changes. A fresh connected
+  # mount reconciles once after restoration and node resolution; root lookup,
+  # task start and reconnect/node changes reconcile only when their scope moves.
+  # The workflow performs the usable-ref and pending-remote checks itself.
+  defp maybe_recover_approvals(socket) do
+    context =
+      Map.take(socket.assigns, [
+        :chat_id,
+        :current_node_id,
+        :current_node,
+        :chat_node,
+        :chat_task_id,
+        :chat_agent_id
+      ])
+
+    if connected?(socket) and context != socket.assigns[:approval_context] do
+      socket
+      |> assign(approval_context: context)
+      |> recover_approvals()
+    else
+      socket
+    end
   end
 
-  defp own_task_request?(socket, request) do
-    req_task_id = Map.get(request, :task_id)
-    chat_task_id = socket.assigns[:chat_task_id]
-    req_task_id != nil and chat_task_id != nil and req_task_id == chat_task_id
-  end
-
-  defp own_agent_request?(socket, request) do
-    req_agent_id = Map.get(request, :agent_id)
-    chat_agent_id = socket.assigns[:chat_agent_id]
-
-    req_agent_id != nil and chat_agent_id != nil and
-      to_string(req_agent_id) == to_string(chat_agent_id)
-  end
-
-  defp own_node_request?(socket, request) do
-    req_node = Map.get(request, :node)
-    chat_node = socket.assigns[:chat_node] || socket.assigns[:current_node]
-    req_node == nil or req_node == chat_node
-  end
-
-  # Upserts a request into the pending list (newest first): any earlier entry
-  # with the same request_id is dropped (replaced) so duplicates never stack.
-  defp upsert_approval(pending, request) do
-    [request | Enum.reject(pending, &(Map.get(&1, :request_id) == Map.get(request, :request_id)))]
-  end
-
-  # Drops the pending entry with the given request_id (no-op when absent).
-  # Total — request_id may be any term.
-  defp drop_approval(pending, request_id) do
-    Enum.reject(pending, &(Map.get(&1, :request_id) == request_id))
+  defp recover_approvals(socket) do
+    if connected?(socket), do: ApprovalWorkflow.recover(socket), else: socket
   end
 
   # Starts a NEW persisted chat (old chats stay in ChatHistory — there is no
@@ -1401,10 +1455,12 @@ defmodule EvoDashWeb.HomeLive do
     if connected?(socket) do
       chat_id = EvoDash.ChatHistory.current_chat_id() || EvoDash.ChatHistory.new_chat()
 
+      saved_state = EvoDash.ChatHistory.get_state(chat_id)
+
       socket =
         socket
-        |> assign(chat_id: chat_id)
-        |> assign(ChatState.restore(EvoDash.ChatHistory.get_state(chat_id)))
+        |> assign(chat_id: chat_id, model_selection_restore: saved_state || %{})
+        |> assign(ChatState.restore(saved_state))
 
       reconcile_chat(socket)
     else

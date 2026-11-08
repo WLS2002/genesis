@@ -23,9 +23,9 @@ defmodule EvoGit.Config.Schema.LLM do
   `model = "openai_codex:gpt-5.6-terra"` works with no other configuration.
   Such a profile's `provider_options` always carry `auth_mode: :oauth` plus the
   managed `oauth_file`, resolved by `EvoGit.Auth.oauth_file/1` (the profile's
-  own `oauth_file` → the `[llm] oauth_file` config key →
-  `<config_dir>/auth.json`), and the credential is imported lazily from the
-  vendor CLI login at assembly time via `EvoGit.Auth.ensure_credentials/2`.
+  own `oauth_file` → `<config_dir>/auth.json`), and the credential is imported
+  lazily from the vendor CLI login at assembly time via
+  `EvoGit.Auth.ensure_credentials/2`.
   That call is fault-isolated: a missing vendor login never blocks assembly —
   the request then fails with ReqLLM's own credential message and
   `EvoGit.Config.config_status/0` reports the login step.
@@ -45,10 +45,17 @@ defmodule EvoGit.Config.Schema.LLM do
   alias EvoGit.Auth
   alias EvoGit.Config.LLMCatalog
   alias EvoGit.Config.Schema.LLMConstraints
+  alias EvoGit.Config.Schema.ProviderProfiles
 
   # Default context window (tokens) for context-compression decisions when a
   # model profile carries no explicit `context_window`.
   @default_context_window 200_000
+  # Providers whose request path understands a prompt-cache/routing identity.
+  # An UNDECLARED `provider_options` key is a hard request-time validation
+  # error for every other provider, so this gate is mandatory.
+  @cache_identity_providers [:openai, :openai_codex]
+  @cache_identity_prefix "genesis-"
+  @cache_identity_max_length 64
 
   # Normalizes the metadata-source result (app-env seam or catalog lookup) to the
   # documented `%{limits:, capabilities:}` / `nil` contract.
@@ -79,7 +86,7 @@ defmodule EvoGit.Config.Schema.LLM do
         profile_generation_params(config)
 
       # Resolved config map: delegate to default profile
-      Map.has_key?(config, :llm) ->
+      Map.has_key?(config, :llm) or Map.has_key?(config, "llm") ->
         case default_model_profile(config) do
           {:ok, profile} -> profile_generation_params(profile)
           {:error, :not_found} -> []
@@ -91,10 +98,14 @@ defmodule EvoGit.Config.Schema.LLM do
   end
 
   @doc """
-  Returns the list of model profiles from a resolved config map.
+  Returns legacy-compatible runtime profiles from a resolved config map.
 
-  Defensive against malformed config: if `:llm` is not a map (e.g. user wrote
-  `llm = "claude"` — a scalar — instead of a `[llm]` table), returns `[]`.
+  A non-empty `llm.providers` list supplies one profile per provider account,
+  using that account's default model and reasoning effort. This projection does
+  not import credentials or read catalog metadata. Invalid selections are logged
+  and omitted; they never fall through to stale legacy configuration.
+  With no canonical providers, `llm.models` retains its legacy shape unchanged.
+  Malformed `llm` sections return `[]`.
 
   ## Example
 
@@ -103,9 +114,62 @@ defmodule EvoGit.Config.Schema.LLM do
   """
   @spec model_profiles(map()) :: [map()]
   def model_profiles(config) when is_map(config) do
-    llm = Map.get(config, :llm)
-    models = if is_map(llm), do: Map.get(llm, :models), else: nil
-    if is_list(models), do: models, else: []
+    llm = llm_section(config)
+
+    if canonical_providers?(llm) do
+      config
+      |> ProviderProfiles.provider_profiles()
+      |> Enum.flat_map(fn profile ->
+        case ProviderProfiles.resolve_runtime_profile(config, profile["id"]) do
+          {:ok, runtime_profile} ->
+            [runtime_profile]
+
+          {:error, reason} ->
+            Logger.warning("Invalid LLM provider profile selection: #{inspect(reason)}")
+            []
+        end
+      end)
+    else
+      case profile_field(llm, :models) do
+        models when is_list(models) -> models
+        _ -> []
+      end
+    end
+  end
+
+  def model_profiles(_config), do: []
+
+  @doc """
+  Runtime profiles with the model-less legacy fallback used by scheduler boot.
+
+  Canonical providers never fall back to flat keys, even when every selection is
+  invalid. The parent Schema entry point must delegate here for that guarantee.
+  """
+  @spec effective_model_profiles(map()) :: [map()]
+  def effective_model_profiles(config) when is_map(config) do
+    case model_profiles(config) do
+      [] ->
+        if canonical_providers?(llm_section(config)),
+          do: [],
+          else: [build_legacy_default_profile(config)]
+
+      profiles ->
+        profiles
+    end
+  end
+
+  defp llm_section(config) do
+    case profile_field(config, :llm) do
+      %{} = llm -> llm
+      _ -> %{}
+    end
+  end
+
+  defp canonical_providers?(llm) do
+    case profile_field(llm, :providers) do
+      providers when is_list(providers) and providers != [] -> true
+      _ -> false
+    end
   end
 
   @doc """
@@ -120,16 +184,22 @@ defmodule EvoGit.Config.Schema.LLM do
   """
   @spec get_model_profile(map(), String.t()) :: {:ok, map()} | {:error, :not_found}
   def get_model_profile(config, id) when is_map(config) and is_binary(id) do
-    case Enum.find(model_profiles(config), fn p -> Map.get(p, :id) == id end) do
+    case Enum.find(model_profiles(config), fn
+           %{} = profile -> profile_field(profile, :id) == id
+           _ -> false
+         end) do
       nil -> {:error, :not_found}
       profile -> {:ok, profile}
     end
   end
 
   @doc """
-  Returns the first (default) model profile from a resolved config map.
+  Returns the configured default runtime profile.
 
-  Returns `{:ok, profile}` if at least one profile exists, or `{:error, :not_found}`.
+  `llm.default_provider_profile` selects an account by id for both canonical and
+  legacy profiles. Absent a selector, the first account/profile is selected.
+  An invalid explicit selector returns `{:error, :not_found}`, never the first
+  profile as a silent fallback.
 
   ## Example
 
@@ -138,9 +208,27 @@ defmodule EvoGit.Config.Schema.LLM do
   """
   @spec default_model_profile(map()) :: {:ok, map()} | {:error, :not_found}
   def default_model_profile(config) when is_map(config) do
-    case model_profiles(config) do
-      [] -> {:error, :not_found}
-      [profile | _] -> {:ok, profile}
+    llm = llm_section(config)
+
+    if canonical_providers?(llm) do
+      case ProviderProfiles.resolve_runtime_profile(config, nil) do
+        {:ok, profile} -> {:ok, profile}
+        {:error, _reason} -> {:error, :not_found}
+      end
+    else
+      case profile_field(llm, :default_provider_profile) do
+        nil ->
+          case model_profiles(config) do
+            [] -> {:error, :not_found}
+            [profile | _] -> {:ok, profile}
+          end
+
+        id when is_binary(id) ->
+          get_model_profile(config, id)
+
+        _ ->
+          {:error, :not_found}
+      end
     end
   end
 
@@ -338,6 +426,87 @@ defmodule EvoGit.Config.Schema.LLM do
   def provider_from_model(_other), do: nil
 
   @doc """
+  Attaches a stable, per-conversation cache/routing identity to request params.
+  OpenAI's prompt cache is keyed by the request PREFIX **and** a cache/routing
+  identity. ReqLLM derives none of its own — it sends `prompt_cache_key` only
+  when the caller supplies one (`provider_options[:prompt_cache_key] ||
+  provider_options[:session_id]`), and codex's `session-id`/`thread-id` headers
+  likewise exist only when supplied — so without an identity every turn of an
+  otherwise byte-stable conversation misses the cache.
+  The identity is derived from `conversation_id` and is stable for the whole
+  life of that conversation (one agent run), which is exactly the granularity
+  the provider caches at.
+  ## Provider gating
+  Only `:openai` and `:openai_codex` understand these options; an undeclared
+  `provider_options` key is a hard request-time error everywhere else, so every
+  other provider's params are returned byte-identical.
+  - `:openai_codex` gets `prompt_cache_key:` AND `session_id:` (the latter also
+    emits the `session-id` header, matching Codex CLI parity).
+  - `:openai` gets `prompt_cache_key:` only (`session_id` is not in the
+    `:openai` provider schema and would fail validation).
+  ## Explicit user configuration wins
+  When `provider_options` already carries `:prompt_cache_key` (or, for
+  `:openai_codex`, `:session_id`, which already implies the cache key), the
+  params are returned untouched. Otherwise the appended keys extend the EXISTING
+  `provider_options` list — they never replace it, so `auth_mode: :oauth` and
+  `oauth_file:` survive.
+  """
+  @spec with_cache_identity(keyword(), String.t() | nil, term()) :: keyword()
+  def with_cache_identity(params, conversation_id, model) do
+    provider = provider_from_model(model)
+
+    if Keyword.keyword?(params) and is_binary(conversation_id) and conversation_id != "" and
+         provider in @cache_identity_providers do
+      provider_options = Keyword.get(params, :provider_options, [])
+
+      cond do
+        # An option list we do not understand is left byte-identical rather
+        # than guessed at.
+        not Keyword.keyword?(provider_options) ->
+          params
+
+        # Explicit user configuration always wins.
+        Keyword.has_key?(provider_options, :prompt_cache_key) ->
+          params
+
+        provider == :openai_codex and Keyword.has_key?(provider_options, :session_id) ->
+          params
+
+        true ->
+          key = cache_identity(conversation_id)
+
+          additions =
+            case provider do
+              :openai_codex -> [prompt_cache_key: key, session_id: key]
+              :openai -> [prompt_cache_key: key]
+            end
+
+          Keyword.put(params, :provider_options, provider_options ++ additions)
+      end
+    else
+      params
+    end
+  end
+
+  # Deterministic, ASCII, <= 64 characters. The readable `genesis-<id>` form is
+  # used when it fits; otherwise (too long, or non-ASCII) the SHA-256 digest is
+  # url-base64 encoded so the provider key is always well-formed and bounded.
+  defp cache_identity(conversation_id) do
+    readable = @cache_identity_prefix <> conversation_id
+
+    if byte_size(readable) <= @cache_identity_max_length and ascii?(readable) do
+      readable
+    else
+      @cache_identity_prefix <>
+        Base.url_encode64(:crypto.hash(:sha256, conversation_id), padding: false)
+    end
+  end
+
+  defp ascii?(binary) do
+    Enum.all?(:binary.bin_to_list(binary), fn byte -> byte >= 0x20 and byte <= 0x7E end)
+  end
+
+  @doc """
   Returns the appropriate `provider_options` keyword list for a given model spec.
 
   Three branches:
@@ -408,9 +577,9 @@ defmodule EvoGit.Config.Schema.LLM do
   present, importing it from the vendor CLI login when appropriate.
 
   Resolves the provider from the profile's `:model` and the managed file
-  through `EvoGit.Auth.oauth_file/1` (the profile's own `oauth_file` → the
-  `[llm] oauth_file` config key → `<config_dir>/auth.json`), then delegates to
-  the fault-isolated `EvoGit.Auth.ensure_credentials/2`. Returns `:ok` when a
+  through `EvoGit.Auth.oauth_file/1` (the profile's own `oauth_file` →
+  `<config_dir>/auth.json`), then delegates to the fault-isolated
+  `EvoGit.Auth.ensure_credentials/2`. Returns `:ok` when a
   usable credential exists (including a provider env token) and
   `{:error, reason}` otherwise — never raises and never blocks.
 
@@ -472,9 +641,7 @@ defmodule EvoGit.Config.Schema.LLM do
 
   @doc """
   Returns the managed OAuth file a profile's subscription credential uses: the
-  profile's own `oauth_file` wins, otherwise `EvoGit.Auth.oauth_file/1` falls
-  through to the `[llm] oauth_file` config key and finally the default
-  `<config_dir>/auth.json`.
+  profile's `oauth_file` wins, otherwise the default `<config_dir>/auth.json`.
   """
   @spec oauth_file_for(map()) :: String.t()
   def oauth_file_for(profile) when is_map(profile) do
@@ -538,6 +705,11 @@ defmodule EvoGit.Config.Schema.LLM do
 
   Precedence, highest first: the profile's explicit `provider_options` keys →
   the profile-derived OAuth defaults → the model-derived options.
+
+  API-key profiles with a nonempty `api_key_env_var` use that exact name:
+  a nonempty environment value wins over a nonempty persisted credential.
+  Missing custom credentials emit an empty `:api_key` so ReqLLM rejects the
+  request rather than falling back to a provider-wide key; OAuth is excluded.
   """
   @spec profile_generation_params(map()) :: keyword()
   def profile_generation_params(profile) when is_map(profile) do
@@ -556,6 +728,30 @@ defmodule EvoGit.Config.Schema.LLM do
     |> maybe_param(:presence_penalty, Map.get(profile, :presence_penalty))
     |> maybe_provider_options(profile)
     |> LLMConstraints.filter(model, model_metadata(model))
+    |> maybe_api_key(profile)
+  end
+
+  # Keep account-specific API keys at the same assembly boundary as generation
+  # and OAuth options, including callers using the runtime compatibility profile.
+  defp maybe_api_key(params, profile) do
+    name = Map.get(profile, :api_key_env_var)
+
+    if is_binary(name) and name != "" and not oauth_profile?(profile) do
+      key =
+        case System.get_env(name) do
+          value when is_binary(value) and value != "" -> value
+          _ -> Map.get(EvoGit.Config.credentials(), name)
+        end
+
+      # An explicit empty key makes ReqLLM reject missing account credentials
+      # instead of silently using another account's provider-wide default key.
+      case key do
+        value when is_binary(value) and value != "" -> Keyword.put(params, :api_key, value)
+        _ -> Keyword.put(params, :api_key, "")
+      end
+    else
+      params
+    end
   end
 
   @doc false
@@ -683,8 +879,8 @@ defmodule EvoGit.Config.Schema.LLM do
   #      override, its own keys win (an explicit `oauth_file:` inside the
   #      options is honoured) while the OAuth defaults it does not set survive;
   #   2. the profile-derived OAuth defaults (`auth_mode: :oauth` + the managed
-  #      file resolved from THIS profile's `oauth_file`, else `[llm] oauth_file`,
-  #      else `<config_dir>/auth.json`) — `oauth_profile?/1` covers both an
+  #      file resolved from THIS profile's `oauth_file`, else
+  #      `<config_dir>/auth.json`) — `oauth_profile?/1` covers both an
   #      explicit `auth_mode = "oauth"` and auto-detection of an OAuth-only
   #      provider, and this is also where the lazy vendor-login import runs;
   #   3. the model-derived options from `provider_options_for_model/1`

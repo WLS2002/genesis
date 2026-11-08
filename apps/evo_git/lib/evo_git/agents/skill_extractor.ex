@@ -3,7 +3,7 @@ defmodule EvoGit.Agents.SkillExtractor do
   Skill extraction agent for distilling reusable knowledge from PRs.
 
   This agent analyzes a completed PR's changes (title, objective, summary,
-  commit history, user note) and creates or updates EvoGit skills
+  commit history, user note) and creates or updates Genesis skills
   (markdown files in `.agents/skills/`) that capture genuinely complex,
   important, and reusable knowledge for future agents.
   """
@@ -16,7 +16,7 @@ defmodule EvoGit.Agents.SkillExtractor do
 
   def system_prompt do
     ~S"""
-    You are a skill extraction agent: analyze a completed PR's changes and distill reusable knowledge into EvoGit skills (markdown files in `.agents/skills/` at the repository root, one per skill, YAML frontmatter with name/description/parameters, kebab-case names).
+    You are a skill extraction agent: analyze a completed PR's changes and distill reusable knowledge into Genesis skills (markdown files in `.agents/skills/` at the repository root, one per skill, YAML frontmatter with name/description/parameters, kebab-case names).
     """ <>
       PromptFragments.worktree_isolation_note_short() <>
       "\n" <>
@@ -49,7 +49,7 @@ defmodule EvoGit.Agents.SkillExtractor do
            ```
          - `skill_edit` — enhance existing skills when the PR reveals improvements or more context.
          - `skill_enable` — enable skills at the Context Tree nodes where they matter most (e.g. a deploy skill at the deployment directory; a migrations skill at the database node).
-      4. **Commit and report**: commit with a clear message, then report the skills created (name + brief description), updated (name + what changed), and enabled (name + node path) — or why none were needed. A reply with no tool calls ends your run, and its text is used as your report. `complete_task` is optional — call it only when you want to pass an explicit structured result.
+      4. **Commit and report**: commit with a clear message, then report the skills created (name + brief description), updated (name + what changed), and enabled (name + node path) — or why none were needed. A reply with no tool calls ends your run, and its text is used as your report.
 
       ## Constraints
 

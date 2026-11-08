@@ -21,9 +21,10 @@ Web-layer tests reference those singletons directly; per-test Store/TaskRegistry
 - `evo_dash_web/` (root) → cross-cutting web-layer suites with no child doc: `helpers_test.exs` (85 tests, status badges/datetime/icons/modals), `helpers_blob_preview_test.exs` (23, `blob_preview/2` + `list_preview/2` caps), `theme_color_test.exs` (27, color VALUES), `content_text_test.exs` (9).
 - `evo_dash_web/live/` → LiveView page suites + pure unit tests for their support modules (`settings_live/` holds `config_io_test.exs`, `model_profile_helpers_test.exs`, `auth_status_test.exs` and `model_ids_test.exs`) — detail: `live/CONTEXT.md`, `live/agents_live/CONTEXT.md`.
 - `evo_dash_web/live_hooks/` → the on-mount hook suites (NodeAware, Guide, Appearance, DesktopQuit, UpdateStatus) — detail: `live_hooks/CONTEXT.md`.
-- `evo_dash_web/components/` → function-component render/contract suites (all `async: true`, `render_component/2` + Floki) — detail: `components/CONTEXT.md`.
+- `evo_dash_web/components/` → function-component render/contract suites (all `async: true`, `render_component/2` + Floki), including task-form/profile-editor integration pins and the shared LLM-selection coverage boundary — detail: `components/CONTEXT.md`.
 - `evo_dash_web/controllers/` → error templates + the streamed task-archive export endpoint — detail: `controllers/CONTEXT.md`.
-- No CONTEXT.md exists at `evo_dash_web/` or at the individual page subdirectories (`projects_live/`, `home_live/`, `settings_live/`, `system_live/`, `tasks_live/`, `review_live/`).
+- Provider-profile selection contracts → `evo_dash_web/components/CONTEXT.md` and `evo_dash_web/live/CONTEXT.md`, with focused support-module contracts documented under `live/projects_live/`, `live/home_live/` and `live/settings_live/`.
+- No CONTEXT.md exists at `evo_dash_web/`; consult the nearest documented child node for page-specific coverage.
 
 ## API Surface
 
@@ -116,11 +117,13 @@ Census by MODULE (the unit ExUnit parallelises), not by file: 89 case modules ac
 Eight files hold both kinds (`review_live_test.exs` 9 case modules, `node_context_test.exs` 2, `node_aware_test.exs` 2, and `projects_live_test.exs`, `settings_live_test.exs`, `system_live_test.exs`, `welcome_live_test.exs`, `welcome_complete_live_test.exs` with one async + one sync module each); the other 66 files are a single case module.
 The other 24 `defmodule`s in this tree (113 total) are helpers with no case template: 18 in the test files (the review/settings/system/projects `Helpers` modules, the fake `ConnectionManager` GenServers, `SafeCallTest.SlowServer`, the diff-viewer `Foo`) and 6 in `support/`; three of them (`review_live_test`, `system_live_test`, `settings_live_test`) still `use EvoDashWeb.ConnCase` for its imports without running tests.
 ExUnit drains ALL async modules before starting any sync one (`ExUnit.Runner.async_loop/4`), so a flip is unsafe only when a module shares a MUTABLE global with another ASYNC module.
-No `async: false` module is blocked by the config dir: `EvoGit.Platform.config_dir/1` resolves through the `:config_dir_fun` seam per process (own dictionary, then the `$callers` chain — LiveViewTest sets a view's `$callers` to the test pid), so a config-writing module isolates with `setup`-time `EvoDash.Test.ConfigDir.isolate!/1` and stays async.
+Config-directory isolation itself is not a reason for `async: false`: `EvoGit.Platform.config_dir/1` resolves through the `:config_dir_fun` seam per process (own dictionary, then the `$callers` chain — LiveViewTest sets a view's `$callers` to the test pid), so a config-writing module can isolate with `setup`-time `EvoDash.Test.ConfigDir.isolate!/1` and stay async.
+The mounted-only `support/config_dir_test.exs` proof is synchronous because async Projects tests replace the global `:projects_async_load_runner`, which can bypass its real configuration load; its other two proofs remain async.
 The 16 sync modules and the one global that forces each (per-file evidence: the child docs `evo_dash/CONTEXT.md`, `live/CONTEXT.md`, `live_hooks/CONTEXT.md`, `controllers/CONTEXT.md`):
 
 | File → module | Tests | Forcing global |
 |---------------|-------|----------------|
+| `support/config_dir_test.exs` → `EvoDash.Test.ConfigDirMountedTest` | 1 | reads the real Projects configuration loader, which async `ProjectsLiveTest` replaces through global `:projects_async_load_runner`; the two non-mounted proofs remain async |
 | `evo_dash/active_tasks_test.exs` | 9 | writes junk sentinel shapes into the `{nil, node()}` `EvoDash.ActiveTasks` key that async whole-page mounts seed from |
 | `evo_dash/isolated_task_store_test.exs` | 3 | terminates/restarts the process-global `EvoGit.Store`+`TaskRegistry` pair and asserts ABSOLUTE properties of the replacement |
 | `evo_dash/runtime_config_test.exs` | 9 | the OS PROCESS ENVIRONMENT (`PHX_SERVER` / `EVOGIT_DESKTOP` / `EVOGIT_SERVER` / `EVOGIT_REMOTE_DAEMON` / `RELEASE_NAME`, plus `HOME` / `XDG_DATA_HOME` / `APPDATA` redirected into a per-test temp dir), the `:evo_dash` `:desktop_release` app-env flag, and the `:evo_git` `:config_dir_fun` seam; evaluates the REAL `config/runtime.exs` with `Config.Reader.read!/2` in the `:test` and `:prod` envs, and pins `EvoDash.Application.children/0`'s mode-invariant endpoint |
@@ -182,8 +185,30 @@ The editor's credential-status verdicts (`Login detected` / `No subscription log
 The page-level tests exist because `SettingsLive` must FORWARD `auth_statuses={@auth_statuses}` into `EvoDashWeb.SettingsComponents.category_section/1` (which passes it to the editor): dropping that attribute leaves the assign correct but renders every line neutral, so the verdict/guidance/path assertions are the only guard.
 The full guidance and managed-file path render only in the editor's edit form (`details: true`), so those tests open the profile's edit form first; `profile_row/2` scopes assertions to one profile's summary row.
 
+### Genesis Assistant evaluator approvals
+The approval card's pure async render contracts live in `evo_dash_web/live/approval_card_render_test.exs`, and the async recovery/state-machine contracts live in `evo_dash_web/live/home_live/approval_workflow_test.exs`.
+Mounted approval flows live in the existing sync `home_live_test.exs` suite because it owns process-global ChatHistory, Store/TaskRegistry isolation and approval runner/responder seams.
+Coverage distinguishes exact-code write versus sudo Elixir requests and legacy cards, source-chat ownership versus evaluator target, asynchronous pending recovery, monotonic scope/result guards, snapshot races and retaining failed-response cards for retry.
+The helper test node's `CONTEXT.md` and the LiveView test context document the detailed recovery contracts.
+
 ### Speed ↔ quality control
 The task form's segmented control is covered at component level (`task_form_components_test.exs`, `#quality-level-control` markup + exact active/inactive class strings) and at page level (`projects_live_test.exs`, `select_quality_level` assign movement and `:quality_level` opt threading).
+
+## Provider-profile redesign regression coverage
+
+Shared component contracts cover provider-scoped model choices, slider indices 0/middle/last, invalid and singleton inventories, task-form forwarding, accessibility and independent reasoning/quality controls.
+Projects contracts cover normal/GitHub canonical `model_spec` locks versus explicit Auto, session-state persistence and node/path/target/generation stale-result rejection.
+Assistant contracts cover provider/model/reasoning options, typed and suggestion sends, ChatState migration, remount/new-chat persistence and node isolation.
+Welcome contracts cover canonical multiple-model/default/reasoning setup, API-key/OAuth paths, unrelated-setting preservation and deterministic connection-result guards.
+Settings contracts cover canonical `llm.providers` persistence without legacy shadows, unrelated-setting preservation, nested generation typing and inheritance, nested model inventories, OAuth credential handling, editor CRUD/default/cancel and row actions, Quick Setup, connection-test resolver options and legacy editing.
+Settings page and helper suites use the parent editor adapter contract and await asynchronous save completion before asserting authoritative persistence.
+All new pure contracts are async; mounted task-launch and chat tests retain existing process-global ownership constraints.
+Normal dashboard Mix execution reaches ExUnit and exercises canonical provider integration through the mounted pages.
+Canonical provider fixtures require a `models` list of nested model rows containing the configured default model; an explicitly emptied model inventory must fail validation without mutating persisted config, and its retained draft must support correction and retry.
+Mounted positive remote URL/resume tests use the source-owned, default-inert arity-2 `:remote_project_load_runner` (`node, path`; default `ProjectFlow.remote_project_load/2`) and `:remote_resume_task_runner` (`node, task_id`; default `NodeContext.get_task_lite/2`) inside real supervised tasks.
+The test helper `install_remote_activation_fixture!/2` supplies target-owned fixtures and verifies distinct remote BEAM identities and exact runner invocation without bypassing pending guards; a non-nil target with the local BEAM identity is intentionally pending.
+The positive mounted config-directory proof runs synchronously because async Projects tests replace the global `:projects_async_load_runner`, which can bypass its real configuration load; the two non-mounted proofs remain async.
+Standalone pure/render checks and individually green helper directories do not establish collective mounted-suite success.
 
 ## Constraints
 

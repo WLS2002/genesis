@@ -1,5 +1,5 @@
 defmodule EvoGit.Runtime.SkillExtraction do
-  @moduledoc "Skill Extraction Phase: analyzes a completed PR and distills findings into EvoGit skills"
+  @moduledoc "Skill Extraction Phase: analyzes a completed PR and distills findings into Genesis skills"
   alias EvoGit.Core.PhyloGraphNode
   alias EvoGit.Core.ContextNode
   alias EvoGit.AgentScheduler
@@ -21,10 +21,21 @@ defmodule EvoGit.Runtime.SkillExtraction do
       context_node = ContextNode.load("./", repo_path)
       foreign_repos = Helpers.load_foreign_repos(repo_path, opts)
 
-      case AgentSpec.new(context_node, phylo_node, EvoGit.Agents.SkillExtractor, objective,
-             foreign_repos: foreign_repos,
-             archive: Keyword.get(opts, :archive, false),
-             task_id: Keyword.get(opts, :task_id)
+      spec_opts =
+        [
+          foreign_repos: foreign_repos,
+          archive: Keyword.get(opts, :archive, false),
+          task_id: Keyword.get(opts, :task_id)
+        ]
+        |> Keyword.merge(Keyword.take(opts, [:model_spec, :model_id, :model_id_locked]))
+        |> Helpers.normalize_model_selection_opts()
+
+      case AgentSpec.new(
+             context_node,
+             phylo_node,
+             EvoGit.Agents.SkillExtractor,
+             objective,
+             spec_opts
            )
            |> AgentScheduler.run_agent() do
         {:ok, %Result{} = agent_output} ->
@@ -79,7 +90,7 @@ defmodule EvoGit.Runtime.SkillExtraction do
       end
 
     """
-    Extract reusable knowledge from this completed PR and distill it into EvoGit skills.
+    Extract reusable knowledge from this completed PR and distill it into Genesis skills.
 
     #{diff_instruction}
 

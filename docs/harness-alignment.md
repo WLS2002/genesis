@@ -228,7 +228,7 @@ delivered where the model already looks (tool descriptions), not in a role essay
 | | `dsh` | Ours |
 |---|---|---|
 | Measure | `tokenMeter.measure().totalTokens` = last reported usage + signed delta over the surface since then; `CHARS_PER_TOKEN = 4`, **no tokenizer**; includes generation, not just prompt | `state.total_tokens` (system + input + output + reasoning accumulated per turn) |
-| Trigger | `thresholdTokens = min(W*0.8, W − reservedCompletion − 65536)`, `retainTokens = (W − O)*0.16` — **window-relative** | `min(0.8·W, W − reserved − 64K)` floor `min(32K, 0.9·W)`, with `W` read from each `[[llm.models]]` profile's configured `context_window` (**default 200 000**) — config, not the catalog; `[:llm] :compression_threshold_tokens` is an optional explicit override |
+| Trigger | `thresholdTokens = min(W*0.8, W − reservedCompletion − 65536)`, `retainTokens = (W − O)*0.16` — **window-relative** | `min(0.8·W, W − reserved − 64K)` floor `min(32K, 0.9·W)`, with `W` read from the nested `[[llm.providers.models]]` entry's `context_window` override or its provider-profile default (**configured budget, default 200 000**) — never the catalog; `[:llm] :compression_threshold_tokens` is an optional explicit override |
 | Trigger points | 4: `agent/pre-step` over pressure, `CONTEXT_WINDOW_EXCEEDED`, `IMAGE_OFFLOAD_REQUIRED`, `/compact` | 1: `ContextCompression.maybe_compress/1` at the top of `loop/1` |
 
 `W` is deliberately an operator-declared per-profile value rather than the catalog's `limits.context`: models
@@ -422,14 +422,18 @@ authoritative comparison.
   `ReqLLM.Response.text/1`, so only `:text` content parts count — for a streamed/reasoned reply whose assembled
   content is `[text, thinking]`, the reasoning text can never be promoted into the report.
 - **A reply with no tool calls ends the run, and its text is the report** — exactly `dsh`'s rule. The text is
-  wrapped into the same `%Result{}` the explicit route builds, so the scheduler, `merge_and_report`, archive
-  refs, usage accounting, persistence and the dashboard all stay unchanged.
-- Two completion routes share one builder. The implicit route **commits the worktree before capturing
-  `commit_sha`** (`AgentScheduler.Dispatch.commit_pending_in_worktree/0` first) — otherwise `merge_and_report`
-  takes the no-changes path and the work dies with the worktree. The dirty-workspace gate deliberately does NOT
-  apply to the implicit route: the model has already finished, and a legitimate finish must never be turned
-  into a refusal.
-- `complete_task` remains supported and optional.
+  handed to `EvoGit.Agent.Completion`, which writes the git note, the archive refs and the
+  `%EvoGit.Agent.Result{}`; the scheduler, `merge_and_report`, usage accounting, persistence and the dashboard
+  all stay unchanged.
+- There is exactly ONE finish route, and it **commits the worktree before capturing `commit_sha`**
+  (`AgentScheduler.Dispatch.commit_pending_in_worktree/0` first) — otherwise `merge_and_report` takes the
+  no-changes path and the work dies with the worktree. There is no dirty-workspace gate on finishing: the model
+  has already finished, and a legitimate finish must never be turned into a refusal.
+- **The explicit completion tool was removed entirely** — no `complete_task` schema, no dispatch branch, no
+  whitelist entry, no prompt text — so the finish contract now matches `dsh` in full: a reply with no tool calls
+  finishes the run and IS the report. The tool's side-effect machinery (git note, archive refs, `%Result{}`
+  construction) survives, re-hosted as that implicit route's completion step in `EvoGit.Agent.Completion`
+  (renamed from `EvoGit.Agent.Tools.CompleteTask`).
 - The no-tool-call nudge budget dropped from 3 to 1 and now fires only for `:empty` (a genuinely empty
   response); a response with usable text is not a protocol violation.
 
@@ -492,7 +496,10 @@ authoritative comparison.
 ### 9.5 Shipped — background jobs, sandbox-integrated (proposal 3.5, minus PTY)
 
 - `bash` gained `run_in_background`; companion tools `job_output` (delta reads + optional bounded `wait`),
-  `job_list`, `job_kill` mirror `dsh`'s names, job-id shape and envelopes. `job_output`/`job_list`/`job_kill`
+  `job_list`, `job_kill` mirror `dsh`'s names and envelopes; deliberately NOT `dsh`'s job-id shape — ids are
+  short per-registry sequential strings (`bash-1`, `bash-2`, …) so a model can repeat one, and `job_output`
+  also accepts an omitted `job_id` when the agent owns exactly one job (an error naming every id otherwise).
+  `job_output`/`job_list`/`job_kill`
   are control tools (in both schema lists, never write, never serial); **starting** a background process is
   classified as a write CALL (`Tools.write_call?/2`) — it can mutate anything a foreground command can, so a
   repo-less or read-only-foreign-repo agent must not start one, while it may still collect and kill its own
@@ -517,8 +524,8 @@ authoritative comparison.
 `agent/compression/`:
 
 1. **`Compression.Threshold`** — the trigger is window-relative (`min(0.8·W, W − reserved − 64K)`, floored at
-   `min(32_000, 0.9·W)`), where `W` is the `[[llm.models]]` profile's configured `context_window`
-   (default 200 000). The model catalog is consulted ONLY for the output reservation, never for the window:
+   `min(32_000, 0.9·W)`), where `W` is the nested `[[llm.providers.models]]` entry's `context_window`
+   override or its provider-profile default (configured budget, default 200 000). The model catalog is consulted ONLY for the output reservation, never for the window:
    long-context quality and pricing degrade, so the operator-declared budget is the right one.
    `[:llm] :compression_threshold_tokens` is now an optional explicit override (nil = derive).
 2. **`Compression.ToolResultPruner`** — a model-free stage one: results older than the recency window are cut
@@ -545,6 +552,11 @@ authoritative comparison.
 - One canonical finish sentence replaces the "you must call `complete_task`" mandate in every role that has a
   loop (Architect, Manager, Executor, ContextExtractor, TaskScheduler, GenesisPlanner, Investigator, SkillExtractor,
   SelfReflective) — the read-only Investigator previously had no finish statement at all.
+- The turn-budget and recovery messages now teach that same contract: `TurnWarning`'s `:end`/`:critical` warnings,
+  `Runner.recovery_warning_message/2`, the scheduler's `@cancel_message` and the Genesis implementation-phase
+  objective all ask for one thing — a plain-text final report and no tool calls (committing uncommitted work
+  first). No completion tool is offered or named, because none exists: a reply with no tool calls is the only
+  way to finish.
 - All prompt-side tool references were repointed to the model-facing names; `web_fetch` / `lsp` are mentioned
   where they solve a role's problem (docs lookup, Elixir diagnostics) and omitted where they would be
   catalogue padding.

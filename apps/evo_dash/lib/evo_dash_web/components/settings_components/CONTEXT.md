@@ -6,7 +6,7 @@ Sub-component modules extracted from `EvoDashWeb.SettingsComponents` to keep eac
 
 ## Routing Table
 
-None — leaf directory (twelve module files).
+None — leaf directory containing the reusable settings presentation modules.
 
 ## API Surface
 
@@ -16,6 +16,8 @@ None — leaf directory (twelve module files).
 |--------|---------|
 | `CategoryMetadata` | Pure helper functions (display names, icons, schema matching, API key hints) |
 | `SettingCard` | Schema-driven form field component with type-dispatched input controls |
+| `ProviderProfilesEditor` | Presentation-only canonical `[[llm.providers]]` editor with shared connection/auth/capacity, multiple models, default selection and per-model overrides; the legacy `ModelProfilesEditor` remains independent. |
+| `ProviderProfileFields` | Pure provider-editor building blocks for labeled inputs, ordered reasoning inventories/defaults, generation parameters, peak/day controls and node-correct OAuth guidance. |
 | `ModelProfilesEditor` | List editor for `[[llm.models]]` profiles with inline edit form |
 | `CustomAgentsEditor` | List editor for `agents.toml` custom agents (`custom_agents_editor/1`): rows with id/type/level/model badges + prompt preview, inline edit form (name, description, prompt, agent_type, delegation_level, model_id select, max_turns, tools/subagents checkboxes), delete with data-confirm. Optional `attr(:custom_tool_names, :list, default: [])` — the loaded custom tool names (see `CustomToolsPanel.custom_tool_names/1`), threaded into the edit form as an additional tools-whitelist chip group + an unknown-name warning |
 | `CustomToolsPanel` | `custom_tools_panel/1` — read-only status panel (CardShell) for the custom tool modules discovered in `<config_dir>/tools/`: tool rows (name/module/file + read-only or write badge), per-file load errors, empty state, `{:error, term()}` banner, and a Refresh action. Also exposes the pure `custom_tool_names/1` helper |
@@ -38,13 +40,75 @@ None — leaf directory (twelve module files).
 - **`CustomAgentsEditor.custom_agents_editor/1`'s `:custom_tool_names` attr** (default `[]`): a non-empty, deduped-against-`tool_names()` list renders an ADDITIONAL "Custom tools" chip group under the built-in Tools chips — visually distinct (`border-primary-standalone/40 bg-primary/5`), but with the SAME `<input type="checkbox" name="tools[]" value={name} class="checkbox checkbox-xs">` markup so the save path and `save_custom_agent` parsing are UNCHANGED; order follows the incoming list (documented in a code comment). Any name in `agent_tools(@agent)` that matches NEITHER a built-in nor a loaded custom tool renders a `text-warning` diagnostic line (`Unknown tool names: %{names}. …`) — UI-ONLY, no validation (`agents.toml` stays lenient; core `:invalid_tools` semantics unchanged).
 - **Every tool-name comparison is ALIAS-AWARE via `EvoGit.Agent.ToolNames`** (`matches_any?/2` + `normalize/1`) — never exact string equality: (a) the amber unknown-name warning treats a legacy spelling (`read_file`, `run_bash`, `search_web`, …) as KNOWN; (b) the custom-chip-vs-built-in collision dedupe drops a loaded custom tool literally named after a built-in alias (`read_file` → the built-in `read` concept chip covers it); (c) a built-in chip's `checked` state lights up for ANY accepted spelling of that concept. Built-in chip LABELS are the model-facing names from `EvoGit.Agent.Tools.schemas()` → `EvoGit.Agent.tool_name/1` (label `read`), while each chip's submitted `value` preserves the agent's OWN saved spelling (`value="read_file"` when `agents.toml` carries the legacy spelling, else the built-in name) — a UI re-save never silently rewrites user config. No save-blocking dashboard validation is added.
 
+## Provider-profile editor — parent integration contract
+
+`ProviderProfilesEditor.provider_profiles_editor/1` accepts canonical string-keyed provider maps without calling the new schema APIs, and `ProviderProfileFields` supplies its pure controls.
+The attrs are `provider_profiles: []`, `default_provider_profile: nil`, `editing_profile_id: nil`, `profile_form_draft: nil`, `auth_statuses: %{}` and `errors: %{}` (form-field name to translated message).
+Each provider map exposes `id`, `name`, `provider`, `auth_mode`, `oauth_file`, `base_url`, `concurrency`, `context_window`, `peak_concurrency`, `timezone`, `off_peak_days`, `peak_hours`, `default_model`, `reasoning_efforts`, `default_reasoning_effort`, `generation` and `models`.
+The optional shared `context_window` is a blank-by-default numeric field with minimum 1024, and model context windows inherit that shared value before the runtime default.
+Each model map exposes `model`, optional `context_window`, optional `reasoning_efforts`, optional `default_reasoning_effort` and `generation` overrides.
+A draft shallow-merges over its provider, and explicit blank strings or empty collections remain authoritative, so the owner must keep complete nested model/generation drafts during row mutations.
+At most one provider may be edited; the stable form id is `provider-profile-edit-form`, with `phx-change="provider_profile_form_change"` and `phx-submit="save_provider_profile"`.
+Creation uses the atom `editing_profile_id: :new` with a map draft and an empty original `profile_id`; every string id, including `"new"`, identifies an ordinary saved provider row.
+The creation discriminator is distinct from persisted string ids, so adding an account while an account named `"new"` exists renders only one form and one copy of every editor id.
+The form is labelled by `provider-profile-settings-title`, references `provider-profile-errors` when the owner supplies errors, and renders only one submit button while row/cancel/recheck actions are explicit non-submit buttons.
+Unsupported reasoning defaults remain selectable for correction and set `aria-invalid="true"` on their labelled select instead of silently changing the saved value.
+The existing legacy editor is unchanged and must not be mounted alongside this editor against the same edit assigns.
+
+### Wiring in the sibling `settings_components.ex` (owned by the parent)
+
+`SettingsComponents.category_section/1` imports the provider editor outside the flat `save_category` form and accepts separate `provider_profiles` and `model_selections` projections from SettingsLive.
+The default account comes from `file_config[:llm][:default_provider_profile]`, and edit/draft/auth assigns pass through unchanged except for the parent's flat-to-nested generation display adapter.
+The editor renders a standalone detached form for `editing_profile_id=:new`, and `default_model` is an independent text input because model override rows are optional.
+Connection-test option values JSON-encode the account/model identity through public `SettingsComponents.model_selection_value/1`; they never identify a model by account id alone.
+
+### Events and submitted fields
+
+`add_provider_profile`, `cancel_edit_provider_profile`, `add_provider_model` and `add_provider_peak_hours_row` have no payload requirements.
+`edit_provider_profile`, `delete_provider_profile` and `set_default_provider_profile` submit `profile_id`; the latter updates `[llm] default_provider_profile` and is not a provider-form field.
+`remove_provider_model` and `remove_provider_peak_hours_row` submit zero-based `index` strings.
+`refresh_auth_status` keeps its existing event name and also supplies `profile_id`, which a handler that refreshes all statuses may ignore.
+The change/save payload has original `profile_id`, editable `profile_id_new`, and flat `name`, `provider`, `base_url`, `auth_mode`, `oauth_file`, `concurrency`, `context_window`, `default_model`, `peak_concurrency`, `timezone`, `reasoning_efforts` and `default_reasoning_effort` fields.
+`reasoning_efforts` is an ordered comma-separated string, not a range index; normalize by trimming/filtering blanks/deduplicating while retaining order.
+`generation[temperature|max_tokens|top_p|top_k|frequency_penalty|presence_penalty]` carries optional numeric strings, and `generation[extra]` and `generation[provider_options]` carry JSON object text.
+Both JSON controls have unique associated labels/help text warning against pasting API keys or login tokens; they intentionally display editable advanced configuration rather than silently redacting or corrupting it.
+Models submit `models[index][model|context_window|override_reasoning|reasoning_efforts|default_reasoning_effort]` plus `models[index][generation][...]` using the same generation field names.
+The `override_reasoning` hidden false sentinel plus checked true checkbox is UI-only and must not persist in canonical config.
+When false, omit the model inventory so it inherits provider support but retain a validated model default if explicitly selected.
+When true, a blank inventory means explicit `[]` (reasoning unsupported) and its default must be omitted; a nonempty inventory enables a validated optional default.
+Blank optional numeric/model-generation fields mean inherit, not nil or zero; explicit numeric zero must survive parsing.
+`off_peak_days[]` and `peak_hours[index][days][]` use hidden blank sentinels so clearing all days is submitted, and window times use `peak_hours[index][start|end]`.
+Remove sentinel blanks before core validation, drop fully blank windows, numerically order indexed maps and preserve complete drafts across add/remove events.
+The owner validates unique profile/model ids, supported reasoning defaults, JSON objects, numeric ranges and scheduling before saving; component HTML ranges are not provider-specific validation.
+`default_model` is independent of optional override rows and is never restricted to membership in those rows.
+Unknown default providers and unsupported saved reasoning defaults remain visibly unavailable, never silently replaced.
+Unknown generation/config keys must be preserved by the owner when applying edits.
+
+### Auth and presentation boundaries
+
+OAuth availability comes from existing `LLMCatalog` metadata via a whitelist of catalog-owned provider atoms, never dynamic atom creation or a new schema API.
+OAuth-only providers emit hidden `auth_mode=oauth` and never show an API-key prompt; other providers have API-key guidance without rendering any key/token field.
+`auth_statuses` remains keyed by profile id with `state`, `expires`, `login_instructions` and `oauth_file`; states `ok`, `missing`, `unwritable` and `unknown` accept atom or string forms.
+The owner must clear/reload statuses on node changes; unsaved provider/auth/path changes additionally suppress a saved credential verdict inside the editor.
+Unknown status makes no detected/missing claim, and unwritable status withholds login instructions in favor of the writable-path remedy.
+Managed paths come only from the node-scoped status or an explicitly configured profile path, never `EvoGit.Auth.default_oauth_file/0` on the dashboard machine.
+Generation and scheduling disclosures are native details with all fields still submitted while collapsed, and every input has an associated label or enclosing checkbox label.
+All user-facing text uses Gettext with no catalog edits, responsive grids and theme tokens, and task quality stays separate from reasoning support.
+Persistent new-editor tests belong to the parent-owned test node; they must pin nested payload parsing, add/remove draft preservation, defaults/membership validation, explicit unsupported inventories, numeric zero, node-status invalidation, missing/unwritable/unknown guidance and no credential leakage.
+Render-only checks can run without starting the dashboard using `MIX_ENV=test mix run --no-start` plus `Phoenix.LiveViewTest.render_component/2`, while existing legacy regression tests are `model_profiles_editor_test.exs` and `model_profiles_editor_auth_test.exs`.
+
 ## Notes for Agents — Model Profiles Editor: edit-form layout
 
 The profile edit form (`ModelProfilesEditor.model_profile_edit_form/1`, private) carries the STABLE constant DOM id `model-profile-edit-form` (required by LiveView for forms with `phx-change`; the editor renders this form for at most ONE profile at a time — only the profile whose id equals `@editing_profile_id` — so the constant id stays unique on the page, the same invariant that makes the `model-profile-advanced` details id unique).
 
 Layout, top → bottom — every group is a compact multi-column grid; the repeated `form-control` + label + input + help-text wrapper is the private `input_field/1` component (attrs `name`, `label`, `value`, `type` (default `"number"`), `step`, `min`, `max`, `placeholder`, `help`, `required`, `class`, `input_class`; `value={nil}`/`required={false}` drop the attribute):
 
-- **Identity**: "Profile ID" (`profile_id_new`, required) + "Provider" in a `sm:grid-cols-2` grid, then "Model ID" (required) + "Base URL" in a second `sm:grid-cols-2` grid.
+- **Identity**: hidden `profile_id` preserves the saved identifier, while `profile_id_new` is the required editable identifier with placeholder `default`.
+- **Provider/model inputs are FREE TEXT, not catalog dropdowns**: `provider` is optional text, `model_id` is required text, and `base_url` is optional text rendered for every provider.
+- **Form contract**: `id="model-profile-edit-form"`, `phx-submit="save_model_profile"`, and `phx-change="model_profile_form_change"`; the footer emits `cancel_edit_model_profile` and submits Save Profile.
+- **Model prefills**: map-form models read atom-or-string `provider`, `id`, `base_url`, and JSON-encoded `extra`; legacy string models split on the FIRST colon only, while a string without a colon becomes the model id with a blank provider.
+- **Draft lookup**: only string-keyed draft values are consumed, missing/nil draft values fall back to saved values, and explicit `""` remains authoritative.
+- **Reasoning selection caveat**: both the profile select and SettingCard select mark the blank provider-default option selected only for nil, not an explicit empty-string draft, while all seven explicit options compare through `to_string/1`.
 - **Authentication**: ONE bordered container that renders ONLY for OAuth-supporting providers, sitting between the identity grids and the Performance grid (see the Authentication section below).
 - **Performance** (`grid-cols-1 sm:grid-cols-2 lg:grid-cols-3`): "Concurrency" (`min="1"`, prefill `profile_concurrency(@profile) || 3`), "Context Window (optional)", and **"Reasoning Effort"** as a standalone visible parameter — a `<select name="reasoning_effort">` listing `none minimal low medium high xhigh default` plus a `""` "(provider default)" option. Reasoning effort is NOT part of "Generation Parameters" any more.
 - **Peak / off-peak block**: ONE bordered container (`rounded-lg border border-base-300 bg-base-200/20 p-3`, `hero-clock` + "Peak / Off-Peak Scheduling (optional)" header) holding a `sm:grid-cols-2` `peak_concurrency` | `timezone` grid, then the off-peak day chips, then the compact peak-hours window rows (`input-xs`).
@@ -60,19 +124,34 @@ Reset points: `:profile_advanced_open` returns to `nil` whenever the edit form's
 **Context Window**: `<input type="number" name="context_window" min="1024" placeholder="200000">`, pre-filled via `draft_or_profile(@draft, "context_window", profile_param(@profile, :context_window) || "")` so a form draft wins over the saved value and an absent key renders blank.
 The `:context_window` profile key is OPTIONAL — a blank/absent form value omits it from the profile map so TOML omits it and the evo_git core applies its 200000 default; the input carries no HTML default value, so an untouched edit form submits blank.
 
-**Peak-hour fields** — each `[[llm.models]]` profile may carry two OPTIONAL fields (absent/nil/empty = disabled; the parse side omits the keys from the profile map so TOML omits them):
+**Peak-hour fields** — the editor exposes five optional scheduling keys: `peak_concurrency`, `peak_hours`, `timezone`, `off_peak_days`, and each window's `days`.
+`off_peak_days` checkboxes all use the SAME literal name `off_peak_days` plus a hidden empty sentinel; each window's day checkboxes use `peak_hours[<index>][days]` WITHOUT a hidden sentinel or `[]` suffix.
+Both day controls offer `mon tue wed thu fri sat sun weekdays weekends`, normalize through `ModelProfileHelpers.normalize_days/1`, and interpret no selected window days as every day.
 
 - `peak_concurrency` — non-negative int, concurrency used during peak hours (`0` = hard pause — zero LLM slots during peak). `<input type="number" name="peak_concurrency" min="0">`; pre-filled via `profile_param/2` (atom-or-string key tolerant), blank (`""`) when absent.
 - `peak_hours` — list of daily time-window maps `[%{start: "HH:MM", end: "HH:MM"}]`, 24h local time. Rendered as indexed rows of `<input type="time">` pairs named `peak_hours[<index>][start]` / `peak_hours[<index>][end]` (Phoenix parses these into the nested map the parse side consumes). Absent/`[]` → a single blank row so users can start adding.
 - `timezone` — optional IANA name (`type="text"`, placeholder `Asia/Shanghai`); blank = server local time.
 
-Row events (both buttons `type="button"` so they never submit the form; handlers live in `live/settings_live/`, not in this module): `add_peak_hours_row` (`phx-click="add_peak_hours_row"`, no payload, appends an empty row server-side) and `remove_peak_hours_row` (`phx-click="remove_peak_hours_row"` + `phx-value-index={index}` on a per-row button). After add/remove the server re-renders the edit form pre-filled from file_config.
+Row events (both buttons `type="button"` so they never submit the form; handlers live in `live/settings_live/`, not in this module): `add_peak_hours_row` has no payload, and `remove_peak_hours_row` carries `phx-value-index={index}`.
+The renderer consumes `draft["peak_hours"]` through `ModelProfileHelpers.normalize_peak_hours_draft/1` when non-nil, otherwise saved profile windows, and always supplies at least one blank row.
 
 Pre-fill helpers (private, all nil-safe): `profile_peak_concurrency/1` (→ `""` when absent), `profile_peak_hours/1` (normalizes each window to `%{start: "", end: ""}` strings; single blank row fallback), `edit_peak_hours/2` (the draft's windows are authoritative for the render), `peak_window_value/2` (atom-or-string key tolerant), `peak_window_days/1`, `profile_off_peak_days/1`, `normalize_peak_window/1`, `day_options/0` (7 weekdays + `weekdays`/`weekends`), `draft_or_profile/3` (draft wins, a blank draft value is authoritative).
 
-**Display gap**: the READ-ONLY profile row (`model_profile_row/1`) shows only the `concurrency` slots badge + generation-params summary (`profile_params_summary/1`) — peak fields (`peak_concurrency`, `peak_hours`, `timezone`) are NOT summarized, so a saved peak config is only visible by re-opening the Edit form (the optional `context_window` IS included in the summary when set). There is also NO dashboard surface anywhere showing the currently-effective concurrency or in/out-of-peak state (SystemLive charts only show the live aggregated `llm_capacity`); the Settings editor itself never misrepresents peak state because it never displays it.
+**Display gap**: the read-only profile row summarizes concurrency, OAuth/API-key mode, model display, context window and generation parameters, but not scheduling fields or effective peak state.
 
-**No provider/model-aware validation of generation params (structural gap)**: per-profile generation params (`temperature`, `top_k`, `frequency_penalty`, `presence_penalty`, `reasoning_effort`, `max_tokens`) are NOT validated anywhere against the selected provider/model. The core schema (`EvoGit.Config.Schema.validate/1` → `EctoValidation.validate_model_profile/2`, `apps/evo_git/lib/evo_git/config/ecto_validation.ex:372`) checks only `id`/`model`/`provider_options`/peak fields; the dashboard parse (`ModelProfileHelpers.parse_model_profile_params/2`) checks only JSON shape + peak fields. The only guard today is the HTML input `min`/`max` on the edit form (`model_profile_editor.ex`: temperature `min=0 max=2` — a value positive-legal for OpenAI but rejected by Z.AI/GLM which requires `[0,1]`). A provider-incompatible value is therefore persisted and forwarded verbatim to the provider (Z.AI rejects with a 400). There is NO per-profile warning region in the editor — the only error channel is `put_flash(:error, …)` in `save_model_profile/2`; `per_category_errors`/`setting_card`'s error line never reaches the profile editor (it is not inside the `save_category` form).
+**Component validation boundary**: this editor supplies generic HTML ranges only (`temperature` 0–2 step 0.01, `top_p` 0–1 step 0.01, penalties −2–2 step 0.01, `top_k`/`max_tokens` minimum 1), and a fixed provider-independent reasoning list.
+There is no per-profile error or provider-compatibility warning attr/region in this component, and core request-time filtering must not be inferred from these HTML controls.
+`SettingCard.setting_card/1` accepts `schema`, `value`, optional `error` and `disabled`, names fields with dotted schema paths, and has no own form, submit/change event, or draft storage.
+Its reasoning special case duplicates the profile option list but submits `llm.reasoning_effort`; its `:model_spec` widget is a free-text model string using `model_display/1`, and `:model_profiles` renders only a count badge.
+The remaining flat LLM cards are schema-driven compression/pruning controls: `SettingCard.flat_llm_schemas/1` excludes the dedicated `providers` and `default_provider_profile` keys as well as legacy model/generation fields.
+### Generic search and reset boundary
+
+`CategoryMetadata.dedicated_provider_path?/1` is the shared predicate for `[:llm, :models]`, `[:llm, :providers]` and `[:llm, :default_provider_profile]`, which belong exclusively to the dedicated provider editor.
+`schema_matches?/2` rejects those paths before text matching, including for an empty query, so `SearchResults` omits them from result cards, per-category counts and its total description.
+`category_match_count/3` uses the same matching policy, and the sidebar derives both its filtered count and denominator through it so no excluded path inflates a search badge.
+`SettingCard` withholds generic `reset_key` buttons for all three paths even when a caller directly renders a dedicated schema summary.
+Direct summary fallback cards never serialize provider maps and render `default_provider_profile` only as an identifier, without a competing generic input.
+Normal generic keys retain their search matching, input widgets and reset controls.
 
 ## Notes for Agents — Model Profiles Editor: Authentication (OAuth / API key)
 
@@ -85,7 +164,7 @@ Pre-fill helpers (private, all nil-safe): `profile_peak_concurrency/1` (→ `""`
 - Status map shape (atom keys, produced by `SettingsLive`): `%{state: :ok | :missing | :unknown | :unwritable, expires: integer | nil, account_id: binary | nil, login_instructions: binary | nil, oauth_file: binary | nil}`.
 - `:ok` → success-toned "Login detected", or "Login detected (expires %{date})" when `expires` is an integer ms epoch formatted via `DateTime.from_unix/2` + `EvoDashWeb.Helpers.format_datetime/1`; unparseable → the plain line.
 - `:missing` → amber "No subscription login found" plus the provider's login instructions (`status.login_instructions`, else `EvoGit.Auth.login_instructions/1`), "Managed credential file: %{path}" when `oauth_file` is present, and the "Genesis imports the vendor login automatically on the next run." note.
-- `:unwritable` → amber "Login found, managed credential file not writable" plus "Genesis found the vendor login but could not write its managed credential file.", the "Managed credential file: %{path}" line, and the remedy "Set [llm] oauth_file (or this profile's oauth_file) to a writable location, then recheck."; the login guidance and the auto-import note are WITHHELD (the login is not the problem). The path falls back from `status.oauth_file` to the `auth_status_line` `oauth_file` attr (the profile's configured value, node-independent) — `EvoGit.Auth.default_oauth_file/0` is deliberately never used, since it would describe the dashboard machine rather than a remote node.
+- `:unwritable` → amber "Login found, managed credential file not writable" plus "Genesis found the vendor login but could not write its managed credential file.", the "Managed credential file: %{path}" line, and the remedy "Set oauth_file on this profile to a writable location, then recheck."; the login guidance and the auto-import note are WITHHELD (the login is not the problem). The path falls back from `status.oauth_file` to the `auth_status_line` `oauth_file` attr (the profile's configured value, node-independent) — `EvoGit.Auth.default_oauth_file/0` is deliberately never used, since it would describe the dashboard machine rather than a remote node.
 - `:unknown`, a non-map status and a missing entry → neutral guidance only (the same login instructions behind an information icon and the neutral heading "Subscription login"), never "detected"/"not found"; this is also what a remote node shows when its status cannot be read.
 - Both surfaces render the shared private `auth_status_line/1` (`status`, `provider`, `oauth_file`, `details`); the row passes `details={false}` (icon + label + Recheck only) while the edit form also renders the instructions, managed-file and auto-import (or unwritable-remedy) lines.
 - The Recheck button is `type="button" phx-click="refresh_auth_status"` with the `hero-arrow-path` icon (`btn btn-ghost btn-xs`) on both surfaces; the handler lives in `live/settings_live/`.

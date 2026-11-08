@@ -616,6 +616,120 @@ defmodule EvoDashWeb.ProjectsLiveTest.Helpers do
     end)
   end
 
+  # These URL fixtures keep a genuinely distinct BEAM identity throughout the
+  # real supervised activation, resume read and batch delivery paths. No runner
+  # reads local config, task storage or the filesystem on the remote's behalf.
+  def install_remote_activation_fixture!(path, resume_task \\ nil) do
+    id = save_target!()
+    remote_node = String.to_atom("projects_url_#{id}@127.0.0.1")
+    test_pid = self()
+
+    start_supervised!(
+      {EvoDashWeb.ProjectsLiveTest.ConnectionManager,
+       {id, %{phase: :connected, node: to_string(remote_node), last_error: nil}}}
+    )
+
+    bundle =
+      EvoDashWeb.ProjectsLive.Project.load_model_selection_from_config(
+        %{
+          llm: %{
+            default_provider_profile: "remote-account",
+            providers: [
+              %{
+                "id" => "remote-account",
+                "provider" => "anthropic",
+                "default_model" => "remote-model",
+                "models" => [%{"model" => "remote-model"}]
+              }
+            ]
+          }
+        },
+        false
+      )
+
+    results = %{
+      recent_projects: [%{path: path, name: Path.basename(path)}],
+      active_project: %{path: path, name: Path.basename(path)},
+      active_project_path: path,
+      task_mode: "genesis_new",
+      task_mode_info: EvoDashWeb.Helpers.mode_info_message("genesis_new"),
+      project_config: %{},
+      worktree_script: "",
+      commands: [],
+      foreign_repos: []
+    }
+
+    runners = %{
+      remote_project_load_runner: fn ^remote_node, ^path ->
+        send(
+          test_pid,
+          {:remote_project_loaded, self(), Process.get(:"$callers"), remote_node, path}
+        )
+
+        {:ok, results}
+      end,
+      remote_resume_task_runner: fn ^remote_node, task_id ->
+        assert resume_task != nil
+        assert task_id == resume_task.id
+
+        send(
+          test_pid,
+          {:remote_resume_read, self(), Process.get(:"$callers"), remote_node, task_id}
+        )
+
+        resume_task
+      end,
+      projects_async_load_runner: fn ->
+        # AsyncLoad supplies the target/node/generation envelope itself. Omit
+        # foreign_repos here so the resume test can drive its one-shot guard
+        # explicitly after the real activation and patch batches settle.
+        %{
+          model_selection: bundle,
+          custom_agents: [],
+          model_selection_enabled: false,
+          recent_projects: results.recent_projects,
+          terminal_ids: nil,
+          auto_activate?: false
+        }
+      end
+    }
+
+    for {key, runner} <- runners do
+      previous = Application.fetch_env(:evo_dash, key)
+      Application.put_env(:evo_dash, key, runner)
+
+      on_exit(fn ->
+        case previous do
+          {:ok, value} -> Application.put_env(:evo_dash, key, value)
+          :error -> Application.delete_env(:evo_dash, key)
+        end
+      end)
+    end
+
+    {id, remote_node}
+  end
+
+  def assert_remote_activation_loaded(view, id, remote_node, path) do
+    view_pid = view.pid
+
+    assert_receive {:remote_project_loaded, loader, [^view_pid | _], ^remote_node, ^path}, 2_000
+    assert loader != self()
+    assert loader != view.pid
+    wait_assigns(view, &(&1[:active_project_path] == path))
+    await_async_loads(view)
+    assert remote_node != node()
+    assert assigns(view)[:current_node] == remote_node
+    assert assigns(view)[:current_node_id] == id
+    assert assigns(view)[:remote?] == true
+    assert assigns(view)[:model_selection_ready?] == true
+    assert assigns(view)[:model_selection_scope] == {id, remote_node}
+
+    assert assigns(view)[:selected_model_spec] == %{
+             "provider_profile_id" => "remote-account",
+             "model" => "remote-model"
+           }
+  end
+
   # Safety net for tests that freeze the shared, serialized task registry: a
   # failed assertion must never leave it suspended for the next suite.
   # Teardown-only rescue (the registry can already be gone at teardown time).
@@ -887,19 +1001,91 @@ defmodule EvoDashWeb.ProjectsLiveTest.Helpers do
     poll.(poll)
   end
 
-  # Writes a config.toml with a single model profile into the test's isolated
-  # config dir (`set_onboarding_completed/1`'s per-process seam override) so
-  # load_model_profiles has a profile to select.
-  def write_model_profile_config do
+  # Use the real provider-profile TOML boundary, not a forged picker bundle.
+  # Two models with different effort defaults expose accidental fallback to the
+  # provider default in either task-submission path.
+  def write_provider_profile_config do
     config_path = EvoGit.Config.config_path()
     File.mkdir_p!(Path.dirname(config_path))
 
     File.write!(config_path, """
-    [[llm.models]]
-    id = "profile-a"
-    model = {provider = "anthropic", id = "claude-sonnet-5"}
+    [llm]
+    default_provider_profile = "account-a"
+
+    [[llm.providers]]
+    id = "account-a"
+    name = "Test account"
+    provider = "anthropic"
+    api_key_env_var = "EVOGIT_PROJECTS_TEST_API_KEY"
+    default_model = "claude-sonnet-5"
     concurrency = 3
+
+    [[llm.providers.models]]
+    model = "claude-sonnet-5"
+    reasoning_efforts = ["low", "high"]
+    default_reasoning_effort = "low"
+
+    [[llm.providers.models]]
+    model = "claude-opus-5"
+    reasoning_efforts = ["low", "high"]
+    default_reasoning_effort = "high"
     """)
+  end
+
+  def point_registry_at_test_config! do
+    # Sync launch tests own the global TaskRegistry: admission and its spawned
+    # executor now resolve config there, outside the LiveView's $callers chain.
+    registry = Process.whereis(EvoGit.TaskRegistry)
+    config_dir = Process.get(:evogit_config_dir)
+    assert is_binary(config_dir)
+    {:dictionary, dictionary} = Process.info(registry, :dictionary)
+    previous = Keyword.get(dictionary, :evogit_config_dir)
+
+    :sys.replace_state(registry, fn state ->
+      Process.put(:evogit_config_dir, config_dir)
+      state
+    end)
+
+    on_exit(fn ->
+      # Teardown-only: a failed test may have already stopped the registry.
+      try do
+        :sys.replace_state(registry, fn state ->
+          if is_nil(previous),
+            do: Process.delete(:evogit_config_dir),
+            else: Process.put(:evogit_config_dir, previous)
+
+          state
+        end)
+      catch
+        :exit, _ -> :ok
+      end
+    end)
+  end
+
+  def assert_task_model_selection(task, spec) do
+    # Store.Codec may atomize known option names, but canonical spec fields
+    # must remain string-keyed and contain only the exact user selection.
+    assert (opt(task, :model_spec) || opt(task, "model_spec")) == spec
+    assert (opt(task, :model_id_locked) || opt(task, "model_id_locked")) == true
+    refute has_opt?(task, :model_id)
+    refute has_opt?(task, "model_id")
+    # The task row may expose a runtime-derived model id; only the submitted
+    # opts define the dashboard's canonical selection/lock contract.
+  end
+
+  def assert_task_auto_selection(task) do
+    for key <- [
+          :model_spec,
+          "model_spec",
+          :model_id_locked,
+          "model_id_locked",
+          :model_id,
+          "model_id"
+        ] do
+      refute has_opt?(task, key)
+    end
+
+    assert task.model_id == nil
   end
 
   def github_status(view, state) do
@@ -1244,10 +1430,13 @@ defmodule EvoDashWeb.ProjectsLiveTest do
       conn: conn,
       tmp_dir: tmp_dir
     } do
+      write_provider_profile_config()
       {:ok, view, _html} = live(conn, ~p"/projects")
+      await_async_loads(view)
 
       # Open a project so the task form renders
       open_project!(view, tmp_dir)
+      await_async_loads(view)
 
       # Seed the prompt the way the client does, then assert the textarea is
       # client-owned: phx-update="ignore" means LiveView re-renders (on model /
@@ -1256,8 +1445,9 @@ defmodule EvoDashWeb.ProjectsLiveTest do
       assert assigns(view)[:task_prompt] == "my objective"
       assert render(view) =~ ~s(phx-update="ignore")
 
-      # select_model must not touch the prompt
-      html = render_change(view, "select_model", %{"model_id" => "some-model"})
+      # A successful canonical picker transition must not touch the prompt.
+      html = render_change(view, "select_model", %{"model" => "claude-opus-5"})
+      assert assigns(view)[:selected_model_spec]["model"] == "claude-opus-5"
       assert html =~ ~s(phx-update="ignore")
       assert assigns(view)[:task_prompt] == "my objective"
 
@@ -2040,8 +2230,7 @@ defmodule EvoDashWeb.ProjectsLiveTest do
         end
 
         %{
-          model_profiles: [],
-          default_selected_model_id: nil,
+          model_selection: EvoDashWeb.LLMSelection.from_config(%{}, false),
           recent_projects: [%EvoGit.RecentProject{path: async_path, name: "async-project"}],
           terminal_ids: MapSet.new(),
           auto_activate?: false
@@ -2721,8 +2910,7 @@ defmodule EvoDashWeb.ProjectsLiveTest do
          %{
            custom_agents: [%{id: "stale"}],
            model_selection_enabled: true,
-           model_profiles: [],
-           default_selected_model_id: nil,
+           model_selection: EvoDashWeb.LLMSelection.from_config(%{}, false),
            recent_projects: []
          }}
       )
@@ -2876,33 +3064,17 @@ defmodule EvoDashWeb.ProjectsLiveTest do
     end
   end
 
-  describe "remote URL-driven project activation (local node as remote target)" do
-    # Regression coverage for the remote `?project=`/`?resume_from=` URL
-    # landing (e5c5e0ebf): a `?project=` URL naming a remote path must be
-    # routed through the async remote-activation machinery
-    # (`ProjectFlow.spawn_remote_project_activation/2` + the resume-aware
-    # `/3` variant) instead of the local expansion/file-existence branch.
-    #
-    # Seam mechanism: every test registers a fake ConnectionManager in
-    # `EvoGit.RemoteConnection.Registry` reporting phase `:connected` with
-    # `node: to_string(node())`. NodeAware then resolves `?node=<id>` to a
-    # NON-NIL `current_node_id` (so handle_params takes the REMOTE branch)
-    # while `current_node == node()` makes every NodeContext call
-    # (dir?/get_task/add_recent_project/...) short-circuit to the real LOCAL
-    # implementation — the only way to run the real supervised activation task
-    # (incl. the NodeContext.get_task resume restore) end-to-end
-    # deterministically.
-    setup do
-      clear_recent_projects()
-      :ok
-    end
-
+  describe "remote URL-driven project activation" do
+    # Exercise the real supervised URL activation with target-owned loader,
+    # resume-reader and batch fixtures, never a local BEAM posing as remote.
     test "resume landing URL activates the remote project, restores the previous task's foreign repos, and keeps the resume form state (regression)",
          %{conn: conn, tmp_dir: tmp_dir} do
-      root = Path.join(tmp_dir, "orig-repo")
+      remote_path = "/remote/projects/#{Path.basename(tmp_dir)}"
+      root = Path.join(remote_path, "orig-repo")
 
       task =
-        insert_task_fixture!(
+        %TaskInfo{
+          id: "remote-resume-#{System.unique_integer([:positive])}",
           opts: [
             foreign_repos: [
               %{
@@ -2914,30 +3086,33 @@ defmodule EvoDashWeb.ProjectsLiveTest do
               }
             ]
           ]
-        )
+        }
 
-      id = save_target!()
-
-      start_supervised!(
-        {EvoDashWeb.ProjectsLiveTest.ConnectionManager,
-         {id, %{phase: :connected, node: to_string(node()), last_error: nil}}}
-      )
+      {id, remote_node} = install_remote_activation_fixture!(remote_path, task)
 
       {:ok, view, _html} =
         live(
           conn,
           "/projects?project=" <>
-            URI.encode(tmp_dir) <>
+            URI.encode(remote_path) <>
             "&resume_from=" <> task.id <> "&starting_commit=deadbeef&node=" <> id
         )
 
-      # The activation runs in a supervised Task; wait for it to land.
-      wait_assigns(view, &(&1[:active_project_path] == tmp_dir))
+      assert_remote_activation_loaded(view, id, remote_node, remote_path)
+      view_pid = view.pid
+      assert_receive {:remote_resume_read, reader, [^view_pid | _], ^remote_node, task_id}, 2_000
+      assert task_id == task.id
+      assert reader != self()
+      assert reader != view.pid
 
-      # Remote branch routed + activation continuation applied remote_project_load.
+      # Remote branch routed + activation continuation applied the loader data.
       assert assigns(view)[:current_node_id] == id
       assert assigns(view)[:task_mode] == "genesis_new"
-      assert assigns(view)[:active_project] == %{path: tmp_dir, name: Path.basename(tmp_dir)}
+
+      assert assigns(view)[:active_project] == %{
+               path: remote_path,
+               name: Path.basename(remote_path)
+             }
 
       # Resume params preserved — the continuation's push_patch re-runs
       # handle_params WITHOUT resume_from/starting_commit, which must NOT
@@ -2946,8 +3121,8 @@ defmodule EvoDashWeb.ProjectsLiveTest do
       assert assigns(view)[:task_starting_commit] == "deadbeef"
       assert assigns(view)[:show_advanced] == true
 
-      # Task foreign repos restored (resume-aware activation override ran
-      # inside the activation task via NodeContext.get_task + repos_from_task_data).
+      # Task foreign repos restored by the target-owned resume reader inside
+      # the activation task, then converted through repos_from_task_data/2.
       repo = Enum.find(assigns(view)[:foreign_repos], &(&1.id == "orig"))
 
       assert %ForeignRepo{root: ^root, writable: true, base_sha: "abc123", description: "d"} =
@@ -2958,17 +3133,22 @@ defmodule EvoDashWeb.ProjectsLiveTest do
       # task-restored repos with genesis.toml values.
       assert assigns(view)[:resume_foreign_repos_guard] == true
 
-      # AsyncLoad remote_extras reload (what the push_patch re-run spawns; with
-      # node == node() the real spawn carries no :foreign_repos key, so the
-      # guard-drop must be exercised via an injected message) — the guard must
-      # drop the genesis.toml foreign_repos once (regression).
+      # Drive a target-owned remote_extras reload after the actual activation
+      # and push_patch batches settle; the guard drops genesis.toml repos once.
       cur = assigns(view)
       toml_repo = %ForeignRepo{id: "toml", root: "/Source/toml-repo", description: "t"}
 
       send(
         view.pid,
-        {:async_project_load, node(), cur[:current_node_id], tmp_dir,
-         %{model_profiles: cur[:model_profiles], foreign_repos: [toml_repo]}}
+        {:async_project_load, remote_node, id, remote_path,
+         %{
+           foreign_repos: [toml_repo],
+           load_scope: %{
+             seq: cur[:projects_load_seq],
+             node_id: id,
+             selection: cur[:selected_model_spec]
+           }
+         }}
       )
 
       wait_assigns(view, &(&1[:resume_foreign_repos_guard] == false))
@@ -2978,8 +3158,15 @@ defmodule EvoDashWeb.ProjectsLiveTest do
       # A second such reload applies normally — the guard is one-shot.
       send(
         view.pid,
-        {:async_project_load, node(), assigns(view)[:current_node_id], tmp_dir,
-         %{model_profiles: assigns(view)[:model_profiles], foreign_repos: [toml_repo]}}
+        {:async_project_load, remote_node, id, remote_path,
+         %{
+           foreign_repos: [toml_repo],
+           load_scope: %{
+             seq: cur[:projects_load_seq],
+             node_id: id,
+             selection: cur[:selected_model_spec]
+           }
+         }}
       )
 
       wait_assigns(view, &Enum.any?(&1[:foreign_repos], fn r -> r.id == "toml" end))
@@ -2989,23 +3176,18 @@ defmodule EvoDashWeb.ProjectsLiveTest do
       conn: conn,
       tmp_dir: tmp_dir
     } do
-      id = save_target!()
-
-      start_supervised!(
-        {EvoDashWeb.ProjectsLiveTest.ConnectionManager,
-         {id, %{phase: :connected, node: to_string(node()), last_error: nil}}}
-      )
+      remote_path = "/remote/projects/#{Path.basename(tmp_dir)}"
+      {id, remote_node} = install_remote_activation_fixture!(remote_path)
 
       {:ok, view, _html} =
-        live(conn, "/projects?project=" <> URI.encode(tmp_dir) <> "&node=" <> id)
+        live(conn, "/projects?project=" <> URI.encode(remote_path) <> "&node=" <> id)
 
-      wait_assigns(view, &(&1[:active_project_path] == tmp_dir))
+      assert_remote_activation_loaded(view, id, remote_node, remote_path)
 
       assert assigns(view)[:current_node_id] == id
-      # Only the activation continuation assigns task_mode (remote_project_load);
-      # the empty dir auto-detects as a new codebase.
+      # Only the supervised activation continuation assigns this detected mode.
       assert assigns(view)[:task_mode] == "genesis_new"
-      assert assigns(view)[:active_project_path] == tmp_dir
+      assert assigns(view)[:active_project_path] == remote_path
       assert assigns(view)[:task_resume_from] == ""
     end
   end
@@ -4036,6 +4218,7 @@ defmodule EvoDashWeb.ProjectsLiveTest do
       {:ok, view, _html} = live(conn, ~p"/projects")
 
       open_project!(view, tmp_dir)
+      await_async_loads(view)
 
       render_change(view, "select_agent", %{"agent" => "my-agent"})
       render_change(view, "task_change", %{"mode" => "evolve_simple"})
@@ -4122,17 +4305,16 @@ defmodule EvoDashWeb.ProjectsLiveTest do
     end
   end
 
-  describe "node-aware model profiles" do
+  describe "node-aware provider/model picker" do
     setup do
       clear_recent_projects()
+      write_provider_profile_config()
       :ok
     end
 
-    test "a remote PENDING context still serves the LOCAL node's model profiles", %{
+    test "a pending remote target never borrows local providers or consumes its saved picker", %{
       conn: conn
     } do
-      write_model_profile_config()
-
       id = save_target!()
 
       start_supervised!(
@@ -4140,22 +4322,41 @@ defmodule EvoDashWeb.ProjectsLiveTest do
       )
 
       {:ok, view, _html} = live(conn, "/projects?node=" <> id)
+      await_async_loads(view)
 
-      # Pending remote context: @current_node stays the LOCAL node while
-      # @current_node_id names the target (NodeAware pending branch) — so
-      # handle_params resolves the profiles from the LOCAL config (the task
-      # would actually run locally; the remote daemon is not reachable yet).
       assert assigns(view)[:remote?] == false
       assert assigns(view)[:current_node_id] == id
-      assert assigns(view)[:model_profiles] != []
-      assert assigns(view)[:selected_model_id] == "profile-a"
+      assert assigns(view)[:model_selection] == nil
+      assert assigns(view)[:provider_profiles] == []
+      assert assigns(view)[:selected_model_spec] == nil
+
+      saved = %{"provider_profile_id" => "remote-account", "model" => "remote-model"}
+      render_hook(view, "restore_state", %{"node" => id, "model_spec" => saved})
+      assert assigns(view)[:pending_model_selection] == saved
+
+      # Even a current-generation local result cannot validate a remote restore
+      # while the target is connecting. This must not consume or clear it.
+      data = EvoDashWeb.ProjectsLive.Project.load_model_selection(node(), false)
+      cur = assigns(view)
+
+      send(
+        view.pid,
+        {:async_project_load, node(), id, cur[:active_project_path],
+         %{
+           model_selection: data,
+           load_scope: %{seq: cur[:projects_load_seq], node_id: id, selection: saved}
+         }}
+      )
+
+      assert assigns(view)[:pending_model_selection] == saved
+      assert assigns(view)[:model_selection] == nil
+      assert assigns(view)[:provider_profiles] == []
+      assert assigns(view)[:selected_model_spec] == nil
     end
 
-    test "a connected fake remote node degrades to empty profiles (no crash, no Auto option)", %{
+    test "an unreachable connected remote stays unavailable and preserves its saved selection", %{
       conn: conn
     } do
-      write_model_profile_config()
-
       id = save_target!()
 
       start_supervised!(
@@ -4164,26 +4365,191 @@ defmodule EvoDashWeb.ProjectsLiveTest do
       )
 
       {:ok, view, _html} = live(conn, "/projects?node=" <> id)
-
-      # handle_params spawns the grouped async load; mount/3 seeds the LOCAL
-      # profiles first, so wait for the async (degraded) result to apply.
-      # `render_async/2` does NOT await `EvoDash.TaskSupervisor` children (only
-      # `start_async`/`assign_async`), so it never proved the result had landed.
-      # `await_async_loads/1` waits for THIS view's supervised batch to exit and
-      # drains its queued `{:async_project_load, ...}` apply instead.
       await_async_loads(view)
 
-      # The fake BEAM node can never answer :erpc (fails immediately with
-      # {:erpc, :noconnection}) — get_resolved_config fails fast and
-      # Project.load_model_profiles/1 degrades to {[], nil} (documented
-      # branch). The carried local selection is reset to the node's default
-      # (nil — no profiles).
+      # The fake node cannot answer :erpc. Its failed config read must not
+      # silently fall back to account-a on the dashboard host.
       assert assigns(view)[:remote?] == true
-      assert assigns(view)[:model_profiles] == []
-      assert assigns(view)[:selected_model_id] == nil
+      assert assigns(view)[:provider_profiles] == []
+      assert assigns(view)[:model_selections] == []
+      assert assigns(view)[:selected_model_spec] == nil
+      assert assigns(view)[:model_selection] == nil
+      assert assigns(view)[:model_selection_ready?] == false
+      assert assigns(view)[:model_selection_error] != nil
+      refute render(view) =~ "Auto (by rules)"
 
-      html = render(view)
-      refute html =~ "Auto (by rules)"
+      saved = %{"provider_profile_id" => "remote-account", "model" => "remote-model"}
+      render_hook(view, "restore_state", %{"node" => id, "model_spec" => saved})
+      assert assigns(view)[:pending_model_selection] == saved
+      assert assigns(view)[:selected_model_spec] == nil
+
+      # A further failed read cannot consume the pending explicit choice or
+      # turn it into Auto; only an owned, successful remote bundle can do that.
+      cur = assigns(view)
+
+      send(
+        view.pid,
+        {:async_project_load, cur[:current_node], id, cur[:active_project_path],
+         %{
+           model_selection: {:error, :unavailable},
+           load_scope: %{seq: cur[:projects_load_seq], node_id: id, selection: saved}
+         }}
+      )
+
+      assert assigns(view)[:pending_model_selection] == saved
+      assert assigns(view)[:selected_model_spec] == nil
+      assert assigns(view)[:model_selection_error] == :unavailable
+
+      # Recovery must be owned by the genuine remote BEAM and target, not an
+      # unstamped local bundle. The saved choice is consumed only on success.
+      bundle =
+        EvoDashWeb.ProjectsLive.Project.load_model_selection_from_config(
+          %{
+            llm: %{
+              default_provider_profile: "remote-account",
+              providers: [
+                %{
+                  "id" => "remote-account",
+                  "provider" => "anthropic",
+                  "default_model" => "remote-model",
+                  "models" => [%{"model" => "remote-model"}]
+                }
+              ]
+            }
+          },
+          false
+        )
+
+      send(
+        view.pid,
+        {:async_project_load, cur[:current_node], id, cur[:active_project_path],
+         %{
+           model_selection: bundle,
+           load_scope: %{seq: cur[:projects_load_seq], node_id: id, selection: saved}
+         }}
+      )
+
+      assert assigns(view)[:selected_model_spec] == saved
+      assert assigns(view)[:pending_model_selection] == nil
+      assert assigns(view)[:model_selection_scope] == {id, cur[:current_node]}
+      assert assigns(view)[:model_selection_ready?] == true
+      assert assigns(view)[:model_selection_error] == nil
+      assert_push_event(view, "persist_model_selection", %{model_spec: ^saved, node: ^id})
+
+      # A subsequent unavailable refresh must preserve the now-selected value
+      # as well as the pending-restore value exercised above.
+      send(
+        view.pid,
+        {:async_project_load, cur[:current_node], id, cur[:active_project_path],
+         %{
+           model_selection: {:error, :unavailable},
+           load_scope: %{seq: cur[:projects_load_seq], node_id: id, selection: saved}
+         }}
+      )
+
+      assert assigns(view)[:selected_model_spec] == saved
+      assert assigns(view)[:model_selection_ready?] == false
+      assert assigns(view)[:model_selection_error] == :unavailable
+    end
+
+    test "canonical picker events persist exact fields and restore only within their node", %{
+      conn: conn,
+      tmp_dir: tmp_dir
+    } do
+      {:ok, view, _html} = live(conn, ~p"/projects")
+      await_async_loads(view)
+      open_project!(view, tmp_dir)
+      await_async_loads(view)
+
+      assert assigns(view)[:selected_model_spec] == %{
+               "provider_profile_id" => "account-a",
+               "model" => "claude-sonnet-5",
+               "reasoning_effort" => "low"
+             }
+
+      render_change(view, "select_model", %{"model" => "claude-opus-5"})
+      assert assigns(view)[:selected_model_spec]["reasoning_effort"] == "high"
+      render_change(view, "select_reasoning_effort", %{"reasoning_effort" => "0"})
+
+      spec = %{
+        "provider_profile_id" => "account-a",
+        "model" => "claude-opus-5",
+        "reasoning_effort" => "low"
+      }
+
+      assert assigns(view)[:selected_model_spec] == spec
+
+      assert_push_event(
+        view,
+        "persist_model_selection",
+        %{model_spec: ^spec, node: "local"} = persisted
+      )
+
+      refute Map.has_key?(persisted, :selected_model_id)
+      refute Map.has_key?(persisted, :model_selection)
+      refute Map.has_key?(persisted, :provider_profiles)
+      refute Map.has_key?(persisted, :api_key_env_var)
+
+      # Invalid upstream/downstream values leave the current selection intact.
+      for {event, params} <- [
+            {"select_provider_profile", %{"provider_profile_id" => "missing"}},
+            {"select_model", %{"model" => "missing"}},
+            {"select_reasoning_effort", %{"reasoning_effort" => "99"}}
+          ] do
+        render_change(view, event, params)
+        assert assigns(view)[:selected_model_spec] == spec
+      end
+
+      render_hook(view, "restore_state", %{"node" => "other-target", "model_spec" => %{}})
+      assert assigns(view)[:selected_model_spec] == spec
+
+      # Canonical state wins over a stale legacy id, including explicit Auto.
+      render_hook(view, "restore_state", %{
+        "node" => "local",
+        "model_spec" => %{},
+        "selected_model_id" => "account-a"
+      })
+
+      assert assigns(view)[:selected_model_spec] == %{}
+      auto = %{}
+      assert_push_event(view, "persist_model_selection", %{model_spec: ^auto, node: "local"})
+
+      render_hook(view, "restore_state", %{"node" => "local", "model_spec" => spec})
+      assert assigns(view)[:selected_model_spec] == spec
+      assert_push_event(view, "persist_model_selection", %{model_spec: ^spec, node: "local"})
+
+      # Node, target id, path and generation guards are exercised through the
+      # mounted page's actual result handler, not direct socket mutations.
+      cur = assigns(view)
+      bundle = cur[:model_selection]
+      scope = %{seq: cur[:projects_load_seq], node_id: nil, selection: spec}
+      changed_bundle = Map.put(bundle, :config, %{})
+
+      for {message_node, path, stamp} <- [
+            {:"stale@127.0.0.1", tmp_dir, scope},
+            {node(), tmp_dir, %{scope | node_id: "other-target"}},
+            {node(), tmp_dir, %{scope | seq: scope.seq - 1}},
+            {node(), tmp_dir <> "/stale", scope}
+          ] do
+        send(
+          view.pid,
+          {:async_project_load, message_node, nil, path,
+           %{model_selection: changed_bundle, load_scope: stamp}}
+        )
+
+        assert assigns(view)[:model_selection] == bundle
+        assert assigns(view)[:selected_model_spec] == spec
+      end
+
+      # A matching but delayed load also cannot undo a more recent Auto click.
+      render_change(view, "select_provider_profile", %{"provider_profile_id" => ""})
+
+      send(
+        view.pid,
+        {:async_project_load, node(), nil, tmp_dir, %{model_selection: bundle, load_scope: scope}}
+      )
+
+      assert assigns(view)[:selected_model_spec] == %{}
     end
   end
 
@@ -4583,7 +4949,14 @@ defmodule EvoDashWeb.ProjectsLiveSyncTest do
     test "mounts HomeLive at /help", %{conn: conn} do
       {:ok, _view, html} = live(conn, "/help")
 
-      assert html =~ "Chat with Genesis"
+      heading =
+        html
+        |> Floki.parse_document!()
+        |> Floki.find("h1")
+        |> Floki.text()
+        |> String.trim()
+
+      assert heading == "Genesis Assistant"
       assert html =~ ~s(id="chat-form")
     end
   end
@@ -4803,8 +5176,9 @@ defmodule EvoDashWeb.ProjectsLiveSyncTest do
     } do
       {:ok, view, _html} = live(conn, ~p"/projects")
 
-      # Open a project via the palette (open-path mode)
+      # Open a project via the palette (open-path mode) and settle its picker.
       open_project!(view, tmp_dir)
+      await_async_loads(view)
 
       # Seed the prompt the way the client does (restore_state is the
       # still-supported way to set the persisted prompt).
@@ -4869,47 +5243,37 @@ defmodule EvoDashWeb.ProjectsLiveSyncTest do
     end
   end
 
-  describe "remote URL-driven project activation (local node as remote target)" do
-    setup do
-      clear_recent_projects()
-      :ok
-    end
-
+  describe "remote URL-driven project activation" do
     test "remote ?project= tilde path expands via the remote seam, never the local HOME", %{
       conn: conn,
       tmp_dir: tmp_dir
     } do
-      remote_home = Path.join(tmp_dir, "remote-home")
-      File.mkdir_p!(remote_home)
+      remote_home = "/remote/home/#{Path.basename(tmp_dir)}/remote-proj"
+      {id, remote_node} = install_remote_activation_fixture!(remote_home)
+      test_pid = self()
 
-      on_exit(fn ->
-        # Cleanup in on_exit: rescue so teardown failures don't mask real test failures.
-        try do
-          EvoGit.TaskRegistry.remove_recent_project(remote_home)
-        rescue
-          _ -> :ok
-        end
-      end)
+      # Read at call time in both dead-render normalization and activation.
+      # Match the target identity and input exactly: no local HOME fallback.
+      previous = Application.fetch_env(:evo_dash, :remote_path_expand_runner)
 
-      # The remote_path_expand_runner seam is read at call time (both in the
-      # dead render's handle_params and inside the activation task).
-      Application.put_env(:evo_dash, :remote_path_expand_runner, fn _node, _path ->
+      Application.put_env(:evo_dash, :remote_path_expand_runner, fn ^remote_node,
+                                                                    "~/remote-proj" ->
+        send(test_pid, {:remote_path_expanded, remote_node, "~/remote-proj"})
         {:ok, remote_home}
       end)
 
-      on_exit(fn -> Application.delete_env(:evo_dash, :remote_path_expand_runner) end)
-
-      id = save_target!()
-
-      start_supervised!(
-        {EvoDashWeb.ProjectsLiveTest.ConnectionManager,
-         {id, %{phase: :connected, node: to_string(node()), last_error: nil}}}
-      )
+      on_exit(fn ->
+        case previous do
+          {:ok, value} -> Application.put_env(:evo_dash, :remote_path_expand_runner, value)
+          :error -> Application.delete_env(:evo_dash, :remote_path_expand_runner)
+        end
+      end)
 
       {:ok, view, _html} =
         live(conn, "/projects?project=" <> URI.encode("~/remote-proj") <> "&node=" <> id)
 
-      wait_assigns(view, &(&1[:active_project_path] == remote_home))
+      assert_remote_activation_loaded(view, id, remote_node, remote_home)
+      assert_receive {:remote_path_expanded, ^remote_node, "~/remote-proj"}, 2_000
       assert assigns(view)[:active_project_path] == remote_home
     end
   end
@@ -4934,6 +5298,7 @@ defmodule EvoDashWeb.ProjectsLiveSyncTest do
       {:ok, view, _html} = live(conn, ~p"/projects")
 
       open_project!(view, tmp_dir)
+      await_async_loads(view)
 
       render_click(view, "add_foreign_repo", %{
         "repo_id" => "repo1",
@@ -5069,6 +5434,7 @@ defmodule EvoDashWeb.ProjectsLiveSyncTest do
       # validation, before any agent dispatch (no LLM calls, no worktrees, no
       # agents — see the "task_submit clears the prompt" describe).
       make_git_repo!(tmp_dir)
+      await_async_loads(view)
 
       # Launch an evolve task with a nonexistent node_path — the task launches
       # successfully but the wrapper fails fast at validation.
@@ -5129,6 +5495,7 @@ defmodule EvoDashWeb.ProjectsLiveSyncTest do
       {:ok, view, _html} = live(conn, ~p"/projects")
 
       open_project!(view, tmp_dir)
+      await_async_loads(view)
 
       render_change(view, "select_agent", %{"agent" => "my-agent"})
 
@@ -5159,6 +5526,7 @@ defmodule EvoDashWeb.ProjectsLiveSyncTest do
       {:ok, view, _html} = live(conn, ~p"/projects")
 
       open_project!(view, tmp_dir)
+      await_async_loads(view)
 
       # Seed a real git repo so the doomed wrapper's life is pure validation
       # (make_git_repo!/1) — see "task_submit clears the prompt".
@@ -5186,6 +5554,7 @@ defmodule EvoDashWeb.ProjectsLiveSyncTest do
       {:ok, view, _html} = live(conn, ~p"/projects")
 
       open_project!(view, tmp_dir)
+      await_async_loads(view)
 
       render_change(view, "select_agent", %{"agent" => "my-agent"})
 
@@ -5222,21 +5591,25 @@ defmodule EvoDashWeb.ProjectsLiveSyncTest do
       :ok
     end
 
-    test "with a model-selection script, default is Auto (by rules) and submit threads neither key",
+    test "with model-selection rules, explicit Auto submits no model spec, lock or legacy id",
          %{conn: conn, tmp_dir: tmp_dir} do
-      write_model_profile_config()
-      :ok = EvoGit.CustomAgents.save_model_selection_script(~s("profile-a"))
+      write_provider_profile_config()
+      point_registry_at_test_config!()
+      :ok = EvoGit.CustomAgents.save_model_selection_script(~s("account-a"))
       EvoGit.CustomAgents.reload()
 
       {:ok, view, _html} = live(conn, ~p"/projects")
-
-      # The "" sentinel → the select renders "Auto (by rules)" as selected.
-      assert assigns(view)[:selected_model_id] == ""
+      await_async_loads(view)
+      # Rules expose Auto; the configured default still initializes the picker.
+      assert assigns(view)[:selected_model_spec]["provider_profile_id"] == "account-a"
       assert assigns(view)[:model_selection_enabled] == true
 
-      html = open_project!(view, tmp_dir)
+      open_project!(view, tmp_dir)
+      await_async_loads(view)
+      html = render_change(view, "select_provider_profile", %{"provider_profile_id" => ""})
+      assert assigns(view)[:selected_model_spec] == %{}
       assert html =~ "Auto (by rules)"
-      assert html =~ ~s(<option value="" selected)
+      assert has_element?(view, ~s(select[name="provider_profile_id"] option[value=""][selected]))
 
       # Seed a real git repo so the doomed wrapper's life is pure validation
       # (make_git_repo!/1) — see "task_submit clears the prompt".
@@ -5255,29 +5628,35 @@ defmodule EvoDashWeb.ProjectsLiveSyncTest do
       task_id = cleanup_launched_task(html)
       task = EvoGit.TaskRegistry.get_task(task_id)
 
-      # Neither key may be threaded: the runtime script decides the model.
-      # (String-key checks: :model_id/:model_id_locked are not in the codec's
-      # atomization whitelist, so a round-tripped opts decodes them as strings.)
-      refute has_opt?(task, "model_id")
-      refute has_opt?(task, "model_id_locked")
-      assert task.model_id == nil
+      assert_task_auto_selection(task)
     end
 
-    test "with a model-selection script, an explicit profile choice locks the model", %{
-      conn: conn,
-      tmp_dir: tmp_dir
-    } do
-      write_model_profile_config()
-      :ok = EvoGit.CustomAgents.save_model_selection_script(~s("profile-a"))
+    test "an explicit model and slider choice persist exactly and lock out model-selection rules",
+         %{
+           conn: conn,
+           tmp_dir: tmp_dir
+         } do
+      write_provider_profile_config()
+      point_registry_at_test_config!()
+      :ok = EvoGit.CustomAgents.save_model_selection_script(~s("account-a"))
       EvoGit.CustomAgents.reload()
 
       {:ok, view, _html} = live(conn, ~p"/projects")
-      assert assigns(view)[:selected_model_id] == ""
-
+      await_async_loads(view)
       open_project!(view, tmp_dir)
+      await_async_loads(view)
 
-      render_change(view, "select_model", %{"model_id" => "profile-a"})
-      assert assigns(view)[:selected_model_id] == "profile-a"
+      render_change(view, "select_provider_profile", %{"provider_profile_id" => "account-a"})
+      render_change(view, "select_model", %{"model" => "claude-opus-5"})
+      render_change(view, "select_reasoning_effort", %{"reasoning_effort" => "0"})
+
+      spec = %{
+        "provider_profile_id" => "account-a",
+        "model" => "claude-opus-5",
+        "reasoning_effort" => "low"
+      }
+
+      assert assigns(view)[:selected_model_spec] == spec
 
       # Seed a real git repo so the doomed wrapper's life is pure validation
       # (make_git_repo!/1) — see "task_submit clears the prompt".
@@ -5296,28 +5675,39 @@ defmodule EvoDashWeb.ProjectsLiveSyncTest do
       task_id = cleanup_launched_task(html)
       task = EvoGit.TaskRegistry.get_task(task_id)
 
-      # An explicit profile choice threads BOTH keys — the runtime script is
-      # deferred. (String-key opts checks: the codec round-trip demotes
-      # non-whitelisted keys; task.model_id is the dedicated column.)
-      assert task.model_id == "profile-a"
-      assert opt(task, "model_id") == "profile-a"
-      assert opt(task, "model_id_locked") == true
+      assert_task_model_selection(task, spec)
     end
 
-    test "without a script the default is the first profile and submit threads :model_id + :model_id_locked",
+    test "without rules the configured provider/model/effort default is submitted as a locked spec",
          %{conn: conn, tmp_dir: tmp_dir} do
-      write_model_profile_config()
+      write_provider_profile_config()
+      point_registry_at_test_config!()
 
       {:ok, view, _html} = live(conn, ~p"/projects")
+      await_async_loads(view)
 
-      # No script configured → current behavior: first profile is the default
-      # and no "Auto (by rules)" option renders.
-      assert assigns(view)[:selected_model_id] == "profile-a"
+      spec = %{
+        "provider_profile_id" => "account-a",
+        "model" => "claude-sonnet-5",
+        "reasoning_effort" => "low"
+      }
+
+      assert assigns(view)[:selected_model_spec] == spec
       assert assigns(view)[:model_selection_enabled] == false
 
-      html = open_project!(view, tmp_dir)
-      refute html =~ "Auto (by rules)"
-      assert html =~ ~s(<option value="profile-a" selected)
+      open_project!(view, tmp_dir)
+      await_async_loads(view)
+      refute render(view) =~ "Auto (by rules)"
+
+      assert has_element?(
+               view,
+               ~s(select[name="provider_profile_id"] option[value="account-a"][selected])
+             )
+
+      assert has_element?(
+               view,
+               ~s(select[name="model"] option[value="claude-sonnet-5"][selected])
+             )
 
       # Seed a real git repo so the doomed wrapper's life is pure validation
       # (make_git_repo!/1) — see "task_submit clears the prompt".
@@ -5336,11 +5726,7 @@ defmodule EvoDashWeb.ProjectsLiveSyncTest do
       task_id = cleanup_launched_task(html)
       task = EvoGit.TaskRegistry.get_task(task_id)
 
-      # The first profile is threaded as :model_id, and the lock flag IS set
-      # (unconditional per the cross-app contract — harmless without a script).
-      assert task.model_id == "profile-a"
-      assert opt(task, "model_id") == "profile-a"
-      assert opt(task, "model_id_locked") == true
+      assert_task_model_selection(task, spec)
     end
   end
 
@@ -5353,10 +5739,14 @@ defmodule EvoDashWeb.ProjectsLiveSyncTest do
       :ok
     end
 
-    test "Fix starts an :evolve task with the issue markdown and closes the modal", %{
+    test "Fix persists the exact locked model spec, or omits all model options for Auto", %{
       conn: conn,
       tmp_dir: tmp_dir
     } do
+      write_provider_profile_config()
+      point_registry_at_test_config!()
+      :ok = EvoGit.CustomAgents.save_model_selection_script(~s("account-a"))
+      EvoGit.CustomAgents.reload()
       make_evolve_project(tmp_dir)
 
       # Seed an EMPTY (initialized, zero-commit) git repo so the spawned
@@ -5397,62 +5787,50 @@ defmodule EvoDashWeb.ProjectsLiveSyncTest do
       )
 
       {:ok, view, _html} = live(conn, ~p"/projects")
+      await_async_loads(view)
       open_project(view, tmp_dir)
+      await_async_loads(view)
       github_status(view, :ok)
 
-      render_click(view, "open_github_issues", %{})
-      wait_until(view, fn a -> a[:github_issues].status == :ok end)
+      spec = %{
+        "provider_profile_id" => "account-a",
+        "model" => "claude-opus-5",
+        "reasoning_effort" => "low"
+      }
 
-      # Thread a model profile id the way the task-form select does.
-      render_change(view, "select_model", %{"model_id" => "test-model"})
-
-      render_click(view, "github_fix_issue", %{"number" => "42"})
-
-      # The markdown fetch is async; the modal closes once the fix task starts.
-      wait_until(view, fn a -> a[:github_modal_open] == false end)
-
-      html = render(view)
-
-      assert html =~ "task started with ID:"
-      refute html =~ "github-issues-modal"
-
-      [id] = Regex.run(~r/task started with ID: ([a-f0-9]{16})/, html, capture: :all_but_first)
-
-      # Register the on_exit cancel+delete cleanup, then wait for the terminal
-      # status BEFORE the test returns (mirrors cleanup_launched_task/1): the
-      # wrapper's brief life spawns git ports under tmp_dir, and a port still
-      # spawning when the setup on_exit File.rm_rf!(tmp_dir) fires prints
-      # uncatchable "spawn: Could not cd to <tmp_dir>" lines on stderr. On the
-      # unborn-HEAD repo the wrapper is already terminal long before this
-      # point, so the wait returns almost immediately.
-      on_exit(fn ->
-        # Cleanup in on_exit: rescue so teardown failures don't mask real test failures.
-        try do
-          EvoGit.TaskRegistry.cancel_task(id)
-        rescue
-          _ -> :ok
+      for selection <- [spec, %{}] do
+        if selection == %{} do
+          render_change(view, "select_provider_profile", %{"provider_profile_id" => ""})
+        else
+          render_change(view, "select_provider_profile", %{"provider_profile_id" => "account-a"})
+          render_change(view, "select_model", %{"model" => "claude-opus-5"})
+          render_change(view, "select_reasoning_effort", %{"reasoning_effort" => "0"})
         end
 
-        try do
-          EvoGit.TaskRegistry.delete_task(id)
-        rescue
-          _ -> :ok
+        assert assigns(view)[:selected_model_spec] == selection
+        render_click(view, "open_github_issues", %{})
+        wait_until(view, fn a -> a[:github_issues].status == :ok end)
+        render_click(view, "github_fix_issue", %{"number" => "42"})
+
+        # The markdown fetch is async; the modal closes once the fix task starts.
+        wait_until(view, fn a -> a[:github_modal_open] == false end)
+        html = render(view)
+        assert html =~ "task started with ID:"
+        refute html =~ "github-issues-modal"
+
+        id = cleanup_launched_task(html)
+        task = EvoGit.TaskRegistry.get_task(id)
+        assert task.type == :evolve
+        assert task.opts[:path] == assigns(view)[:active_project_path]
+        assert task.opts[:mode] == "simple"
+        assert task.opts[:objective] == "Fix Fix the thing\n\n" <> markdown
+
+        if selection == %{} do
+          assert_task_auto_selection(task)
+        else
+          assert_task_model_selection(task, selection)
         end
-      end)
-
-      wait_for_task_terminal(id)
-
-      task = EvoGit.TaskRegistry.get_task(id)
-
-      assert task.type == :evolve
-      assert task.opts[:path] == assigns(view)[:active_project_path]
-      assert task.opts[:mode] == "simple"
-      assert task.opts[:objective] == "Fix Fix the thing\n\n" <> markdown
-
-      # :model_id is denormalized into TaskInfo.model_id at task creation
-      # (task_registry.ex) — the opts round-trip through the SQLite codec
-      # keeps it on that dedicated field.
-      assert task.model_id == "test-model"
+      end
     end
   end
 
@@ -5474,6 +5852,7 @@ defmodule EvoDashWeb.ProjectsLiveSyncTest do
       # (make_git_repo!/1): the invalid node_path kills it at validation,
       # before any agent dispatch (see "task_submit clears the prompt").
       make_git_repo!(tmp_dir)
+      await_async_loads(view)
 
       for level <- ["fast", "high_quality"] do
         render_click(view, "select_quality_level", %{"level" => level})
@@ -5508,6 +5887,7 @@ defmodule EvoDashWeb.ProjectsLiveSyncTest do
       assert assigns(view)[:quality_level] == "balanced"
 
       make_git_repo!(tmp_dir)
+      await_async_loads(view)
 
       html =
         view

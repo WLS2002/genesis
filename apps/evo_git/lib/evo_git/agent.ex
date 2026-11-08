@@ -55,8 +55,9 @@ defmodule EvoGit.Agent do
   fail recovery.
 
   Budget-aware: during the grace period the agent gets a bounded number of
-  grace turns (`LoopState.grace_turns_remaining`) to call `complete_task`. If
-  it instead calls other tools (a `{:continue, _}` outcome), the turn ends
+  grace turns (`LoopState.grace_turns_remaining`) to finish (a plain-text reply
+  with no tool calls completes the run, and its text IS the report).
+  If it instead calls other tools (a `{:continue, _}` outcome), the turn ends
   without completing — the call sites in `EvoGit.Agent.ToolDispatch` check this
   predicate and, when it returns `false`, decrement `grace_turns_remaining` and
   allow another turn.
@@ -97,8 +98,7 @@ defmodule EvoGit.Agent do
 
       def available_tools do
         EvoGit.Agent.Tools.schemas() ++
-          EvoGit.Agent.SubagentSchemas.schemas(__MODULE__) ++
-          [EvoGit.Agent.Tools.CompleteTask.schema()]
+          EvoGit.Agent.SubagentSchemas.schemas(__MODULE__)
       end
 
       @doc """

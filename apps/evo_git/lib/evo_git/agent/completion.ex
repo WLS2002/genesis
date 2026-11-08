@@ -1,130 +1,29 @@
-defmodule EvoGit.Agent.Tools.CompleteTask do
+defmodule EvoGit.Agent.Completion do
   @moduledoc """
-  The explicit completion tool an agent MAY use to submit its final results.
+  The ONE completion side-effect writer for a finished agent run.
 
-  `complete_task` is OPTIONAL. An assistant reply with NO tool calls finishes the
-  run by itself: the reply text becomes the agent's report — the harness-aligned
-  protocol implemented in `EvoGit.Agent.CompletionProtocol`. Both routes build
-  the identical `%EvoGit.Agent.Result{}` with the identical side effects (git
-  note on the base commit, archive refs when archiving), so every downstream
-  consumer is oblivious to how the agent finished.
+  An agent finishes by replying with NO tool calls — that reply text IS the
+  report (`EvoGit.Agent.CompletionProtocol` + `EvoGit.Agent.ToolDispatch`).
+  There is no completion tool: this module is not a tool and exposes no schema.
+  It is called by `EvoGit.Agent.ToolDispatch.build_completion/2,3` with the
+  final report text and the commit sha captured at completion.
 
-  Calling this tool explicitly differs from a plain text reply in three ways:
-  - the report is passed as the `result` argument instead of being taken from
-    the assistant's reply text
-  - the dirty-workspace check runs before finishing (disable with
-    `check_git_status: false`); the implicit route deliberately skips that check
-    and commits any pending work instead
-  - the run ends immediately, even when the same turn requested further tool
-    calls (those are not executed)
+  `complete/4` records the completion exactly once:
+  - a git note on the final commit (only when a base commit is known),
+  - the archive refs plus the ONE streaming `task_agent_archives` row (only when
+    archiving and a base commit is known),
+  - a `%EvoGit.Agent.Result{}` carrying `commit_sha`, `branch` and `repo_id`,
+    which every downstream consumer (task persistence, `merge_and_report/3,4`,
+    the `genesis/agent_*` review branch, the dashboard) reads unchanged.
 
-  The tool is handled specially in the agent loop and doesn't go through
-  the standard tool execution pipeline.
+  The side effects are identical regardless of how the report text was produced,
+  so every downstream consumer is oblivious to the completion route.
   """
 
   require Logger
 
   alias EvoGit.Adapters.Git
   alias EvoGit.Agent.Result
-  alias EvoGit.Agent.Tools.Failure
-
-  @doc """
-  Returns the tool schema for ReqLLM.
-  """
-  def schema do
-    ReqLLM.tool(
-      name: "complete_task",
-      description:
-        "End the task and report your findings. Calling this tool is OPTIONAL: a plain assistant reply with no tool calls " <>
-          "also finishes the task, and that reply text becomes the report. Use complete_task when you want to pass an " <>
-          "explicit `result` summary, to run the workspace check, or to finish while other tool calls are still pending. " <>
-          "Commit the work you want to keep before finishing (pass check_git_status: false to skip the workspace check). " <>
-          "The report should summarize the status of the ORIGINAL objective as a whole, not just the most recent sub-task you worked on, " <>
-          "and is written in the same language as the original objective.",
-      parameter_schema: %{
-        "type" => "object",
-        "properties" => %{
-          "result" => %{
-            "type" => "string",
-            "description" => "The final findings, results, or report that you want to submit."
-          },
-          "check_git_status" => %{
-            "type" => "boolean",
-            description:
-              "If true (default), checks if the workspace has uncommitted changes before completing. " <>
-                "If set to false, the check is skipped.",
-            default: true
-          }
-        },
-        "required" => ["result"]
-      },
-      callback: fn _ -> {:ok, nil} end
-    )
-  end
-
-  @doc """
-  Checks if the workspace is dirty and returns a failure message if so.
-
-  Returns `{:dirty, failure_message}` if dirty, `{:clean, nil}` if clean. The
-  message is rendered through `EvoGit.Agent.Tools.Failure.error/2`, so it leads
-  with the literal `Error: ` prefix models key "this call did not succeed" off,
-  followed by the guidance (git status + what to do next).
-  """
-  def check_workspace_dirty(repo_path) do
-    case Git.status(repo_path) do
-      {:ok, status_output} when is_binary(status_output) and status_output != "" ->
-        formatted_status = format_git_status_porcelain(status_output)
-
-        guidance = """
-        Please commit the necessary files before calling complete_task.
-
-        Git status:
-        #{formatted_status}
-
-        After committing the files you want to keep, call complete_task again with check_git_status: false to skip the git status check.
-        """
-
-        {:dirty, Failure.error("the workspace has uncommitted changes.", guidance)}
-
-      _ ->
-        {:clean, nil}
-    end
-  end
-
-  @doc """
-  Formats git status --porcelain output for display.
-  Format: "XY filename" where X = staged, Y = unstaged
-  """
-  def format_git_status_porcelain(porcelain_output) do
-    porcelain_output
-    |> String.split("\n", trim: true)
-    |> Enum.map(&format_porcelain_line/1)
-    |> Enum.join("\n")
-  end
-
-  defp format_porcelain_line(line) do
-    case String.graphemes(line) do
-      [x, y | rest] ->
-        filename = Enum.join(rest)
-        status = porcelain_status_code_to_name(x, y)
-        "#{status} #{filename}"
-
-      _ ->
-        line
-    end
-  end
-
-  defp porcelain_status_code_to_name(" ", "M"), do: "modified"
-  defp porcelain_status_code_to_name("M", " "), do: "staged"
-  defp porcelain_status_code_to_name("M", "M"), do: "staged, modified"
-  defp porcelain_status_code_to_name("A", " "), do: "staged (new)"
-  defp porcelain_status_code_to_name(" ", "D"), do: "deleted"
-  defp porcelain_status_code_to_name("D", " "), do: "staged (deleted)"
-  defp porcelain_status_code_to_name("D", "D"), do: "staged, deleted"
-  defp porcelain_status_code_to_name("R", " "), do: "staged (renamed)"
-  defp porcelain_status_code_to_name(" ", "?"), do: "untracked"
-  defp porcelain_status_code_to_name("?", "?"), do: "untracked"
-  defp porcelain_status_code_to_name(x, y), do: "#{x}#{y}"
 
   @doc """
   Performs the actual completion: records branch name, adds metadata note.
@@ -186,6 +85,7 @@ defmodule EvoGit.Agent.Tools.CompleteTask do
         completed_at: DateTime.utc_now(),
         llm_model: Keyword.get(opts, :llm_model),
         model_id: Keyword.get(opts, :model_id),
+        model_spec: Keyword.get(opts, :model_spec),
         llm_generation_params: Keyword.get(opts, :llm_generation_params, []),
         compression_threshold: Keyword.get(opts, :compression_threshold),
         max_turns: Keyword.get(opts, :max_turns),
@@ -338,7 +238,8 @@ defmodule EvoGit.Agent.Tools.CompleteTask do
           data[:llm_model],
           data[:llm_generation_params],
           data[:compression_threshold],
-          data[:model_id]
+          data[:model_id],
+          data[:model_spec]
         ),
       agent_settings: %{
         max_turns: data[:max_turns],
@@ -394,15 +295,70 @@ defmodule EvoGit.Agent.Tools.CompleteTask do
   defp iso8601(value) when is_binary(value), do: value
   defp iso8601(_other), do: nil
 
-  defp build_llm_settings(model, generation_params, compression_threshold, model_id)
+  defp build_llm_settings(model, generation_params, compression_threshold, model_id, model_spec)
        when is_list(generation_params) or is_nil(generation_params) do
-    params_map = Map.new(generation_params || [])
-
-    Map.merge(
-      %{model: model, context_compression_threshold: compression_threshold, model_id: model_id},
-      params_map
-    )
+    # Keep the full selection alongside the effective request settings: model_id
+    # identifies the account/slot pool, not the selected catalog model.
+    %{
+      model: model,
+      context_compression_threshold: compression_threshold,
+      model_id: model_id,
+      model_spec: model_spec
+    }
+    |> Map.merge(Map.new(generation_params || []))
+    |> archive_json()
   end
+
+  # The archive row is PLAIN JSON (`Store.Types.ArchiveColumns`), so the
+  # settings must be JSON-clean BY CONSTRUCTION: generation params legitimately
+  # carry a keyword-list `provider_options` (tuples, which Jason cannot
+  # encode), and an account with an explicit `api_key_env_var` carries
+  # `:api_key`. A tuple or a raw secret here used to make the whole archive
+  # write fail, silently dropping the row.
+  defp archive_json(nil), do: nil
+  defp archive_json(value) when is_boolean(value), do: value
+  defp archive_json(value) when is_atom(value), do: Atom.to_string(value)
+  defp archive_json(value) when is_binary(value) or is_number(value), do: value
+  defp archive_json(%_{} = struct), do: struct |> Map.from_struct() |> archive_json()
+
+  # Credentials are NEVER archived: an `api_key` key is dropped outright (at
+  # any depth), never replaced by a placeholder a consumer could mistake for a
+  # value.
+  defp archive_json(%{} = map) do
+    for {key, value} <- map, not credential?(key), into: %{} do
+      {archive_json_key(key), archive_json(value)}
+    end
+  end
+
+  defp archive_json(list) when is_list(list) do
+    if pairs?(list) do
+      for {key, value} <- list, not credential?(key), into: %{} do
+        {archive_json_key(key), archive_json(value)}
+      end
+    else
+      Enum.map(list, &archive_json/1)
+    end
+  end
+
+  # Anything else (a pid, ref or function that should never be in request
+  # settings) is archived as its inspected form so ONE exotic value cannot cost
+  # the whole row.
+  defp archive_json(other), do: inspect(other)
+
+  defp archive_json_key(key) when is_binary(key), do: key
+  defp archive_json_key(key) when is_atom(key), do: Atom.to_string(key)
+  defp archive_json_key(key), do: inspect(key)
+
+  defp credential?(:api_key), do: true
+  defp credential?("api_key"), do: true
+  defp credential?(_key), do: false
+
+  # A keyword list or any other list of 2-tuples: a JSON object, not an array.
+  defp pairs?([{_key, _value} | _rest] = list), do: Enum.all?(list, &is_tuple_of_two?/1)
+  defp pairs?(_list), do: false
+
+  defp is_tuple_of_two?({_key, _value}), do: true
+  defp is_tuple_of_two?(_other), do: false
 
   defp format_foreign_repos(nil), do: []
 

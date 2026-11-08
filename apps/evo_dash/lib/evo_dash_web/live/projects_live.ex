@@ -20,11 +20,14 @@ defmodule EvoDashWeb.ProjectsLive do
     AttachFile,
     GitHub,
     AsyncLoad,
+    LaunchOptions,
+    ModelSelectionScope,
     Notifications
   }
 
   alias EvoDashWeb.ThemeColor
   alias EvoDashWeb.ExampleTask
+  alias EvoDashWeb.LLMSelection
   alias EvoGit.Core.ForeignRepo
   alias EvoGit.Platform
   alias EvoDash.NodeContext
@@ -127,6 +130,29 @@ defmodule EvoDashWeb.ProjectsLive do
             phx-hook="BrowserNotifications"
             class="flex-1 flex flex-col min-h-0"
           >
+            <div
+              :if={not is_nil(@model_selection_error)}
+              id="model-selection-error"
+              role="alert"
+              class="flex items-center gap-3 rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm"
+            >
+              <p class="flex-1">
+                {gettext(
+                  "Could not load model selection. Your choice has been kept. Reconnect to the node if needed, then retry before launching a task."
+                )}
+              </p>
+              <button
+                type="button"
+                phx-click="retry_model_selection"
+                disabled={
+                  ModelSelectionScope.pending_remote?(assigns) or
+                    EvoDashWeb.RemoteGateComponents.gate_active?(assigns)
+                }
+                class="btn btn-sm btn-outline"
+              >
+                {gettext("Retry")}
+              </button>
+            </div>
             <%!-- Node-context gate: `phase` drives the render branches below.
                  `@remote_status` is a %{phase: ...} map in ANY remote context
                  (set by NodeAware.assign_node/2); a missing/absent status with
@@ -193,8 +219,9 @@ defmodule EvoDashWeb.ProjectsLive do
                     show_advanced={@show_advanced}
                     disabled={is_nil(@active_project)}
                     archive={@task_archive}
-                    model_profiles={@model_profiles}
-                    selected_model_id={@selected_model_id}
+                    provider_profiles={@provider_profiles}
+                    model_selections={@model_selections}
+                    model_spec={@selected_model_spec}
                     custom_agents={@custom_agents}
                     selected_agent_id={@selected_agent_id}
                     quality_level={@quality_level}
@@ -349,8 +376,9 @@ defmodule EvoDashWeb.ProjectsLive do
                     show_advanced={@show_advanced}
                     disabled={is_nil(@active_project)}
                     archive={@task_archive}
-                    model_profiles={@model_profiles}
-                    selected_model_id={@selected_model_id}
+                    provider_profiles={@provider_profiles}
+                    model_selections={@model_selections}
+                    model_spec={@selected_model_spec}
                     custom_agents={@custom_agents}
                     selected_agent_id={@selected_agent_id}
                     quality_level={@quality_level}
@@ -492,13 +520,8 @@ defmodule EvoDashWeb.ProjectsLive do
       # config warning banner can appear a frame later.
       config_status = nil
 
-      # Node-aware: at mount the NodeAware on_mount hook has seeded
-      # current_node to the LOCAL node (the ?node= param is resolved later in
-      # handle_params), so this is the local config path — but the node is
-      # threaded explicitly so the loader never consults the local
-      # :memo_config_resolve memo for a remote context.
-      {model_profiles, selected_model_id} =
-        Project.load_model_profiles(socket.assigns[:current_node])
+      # The canonical picker is loaded by AsyncLoad after node resolution;
+      # never seed a remote page with the local node's model selection.
 
       # Custom agents + model-selection script state for the task form's
       # agent select and the model select's "Auto (by rules)" option.
@@ -539,8 +562,14 @@ defmodule EvoDashWeb.ProjectsLive do
           editing_foreign_repo_id: nil,
           foreign_repo_edit_form: nil,
           show_configure_dropdown: false,
-          model_profiles: model_profiles,
-          selected_model_id: selected_model_id,
+          model_selection: nil,
+          model_selection_scope: nil,
+          model_selection_ready?: false,
+          model_selection_error: nil,
+          provider_profiles: [],
+          model_selections: [],
+          selected_model_spec: nil,
+          pending_model_selection: nil,
           custom_agents: custom_agents,
           selected_agent_id: nil,
           quality_level: "balanced",
@@ -608,6 +637,7 @@ defmodule EvoDashWeb.ProjectsLive do
   @impl true
   def handle_params(params, _url, socket) do
     prev_node_id = socket.assigns[:current_node_id]
+    prev_scope = ModelSelectionScope.current(socket.assigns)
 
     # NOTE: `remote?` must be derived from the socket AFTER `assign_node/2`
     # re-assigns `current_node` — computing it inside the pipe from the outer
@@ -615,7 +645,10 @@ defmodule EvoDashWeb.ProjectsLive do
     # a connected `?node=` URL would render the error gate on the first pass.
     socket = EvoDashWeb.LiveHooks.NodeAware.assign_node(socket, params)
     socket = assign(socket, :current_path, ~p"/projects")
+
     socket = assign(socket, :remote?, socket.assigns.current_node != node())
+
+    node_context_changed? = prev_scope != ModelSelectionScope.current(socket.assigns)
 
     # Auto-activation candidate: no `?project=` in the URL and a LOCAL context.
     # The actual activation runs in the AsyncLoad continuation once the recent
@@ -628,8 +661,8 @@ defmodule EvoDashWeb.ProjectsLive do
         is_nil(params["project"]) and is_nil(socket.assigns[:current_node_id])
       )
 
-    # Node-aware refresh (custom agents + model-selection script state, model
-    # profiles + the node-switch `selected_model_id` validation, remote
+    # Node-aware refresh (custom agents + model-selection script state,
+    # canonical provider/model/reasoning picker, remote
     # project config, and recent projects) now runs in ONE
     # async task so the LiveView process never blocks on cross-node RPCs —
     # see EvoDashWeb.ProjectsLive.AsyncLoad. The spawn sits after the
@@ -659,7 +692,7 @@ defmodule EvoDashWeb.ProjectsLive do
     # for the wrong node (results are stale-guarded on node, but an already
     # resolved status would survive the switch otherwise).
     socket =
-      if prev_node_id != socket.assigns[:current_node_id] do
+      if node_context_changed? do
         socket
         |> assign(:file_pick_bases, %{})
         # Staged raw attachment binaries are per-node client state too — drop
@@ -667,6 +700,7 @@ defmodule EvoDashWeb.ProjectsLive do
         # must never leak across node contexts).
         |> assign(:staged_attachments, [])
         |> assign(:remote_project_loading, nil)
+        |> assign(:foreign_repos_restoring_from, nil)
         |> assign(:resume_foreign_repos_guard, false)
         |> assign(:github_status, nil)
         |> assign(:github_modal_open, false)
@@ -706,7 +740,8 @@ defmodule EvoDashWeb.ProjectsLive do
         # selection made via the palette must survive same-node handle_params
         # runs; the node-switch clear above is what resets it.
         cond do
-          not EvoDashWeb.RemoteGateComponents.gate_active?(socket.assigns) and
+          not ModelSelectionScope.pending_remote?(socket.assigns) and
+            not EvoDashWeb.RemoteGateComponents.gate_active?(socket.assigns) and
             is_binary(project_path) and project_path != "" and
               project_path != socket.assigns[:active_project_path] ->
             case ProjectFlow.normalize_remote_project_path(
@@ -1034,12 +1069,48 @@ defmodule EvoDashWeb.ProjectsLive do
   end
 
   @impl true
-  def handle_event("select_model", %{"model_id" => id}, socket) do
-    {:noreply,
-     socket
-     |> assign(:selected_model_id, id)
-     |> StatePersistence.maybe_persist_state()}
+  def handle_event("retry_model_selection", _params, socket) do
+    if ModelSelectionScope.pending_remote?(socket.assigns) or
+         EvoDashWeb.RemoteGateComponents.gate_active?(socket.assigns) do
+      {:noreply, socket}
+    else
+      # Reuse the scoped loader; failures retain both the choice and pending
+      # browser restore, and success alone restores launch readiness.
+      {:noreply, AsyncLoad.maybe_spawn(socket, socket.assigns[:current_node_id])}
+    end
   end
+
+  @impl true
+  def handle_event("select_provider_profile", %{"provider_profile_id" => id}, socket) do
+    change_model_selection(socket, &LLMSelection.select_provider(&1, &2, id))
+  end
+
+  def handle_event("select_provider_profile", _params, socket), do: {:noreply, socket}
+
+  @impl true
+  def handle_event("select_model", %{"model" => model}, socket) do
+    change_model_selection(socket, &LLMSelection.select_model(&1, &2, model))
+  end
+
+  # Older open tabs send the former flat profile id. Validate explicit ids
+  # strictly before migration; reconciliation alone would hide an invalid pin.
+  # The empty-string sentinel still means explicit Auto.
+  def handle_event("select_model", %{"model_id" => id}, socket) when is_binary(id) do
+    change_model_selection(socket, fn bundle, _current ->
+      with {:ok, opts} <- LLMSelection.task_opts(bundle, id) do
+        {:ok, Keyword.get(opts, :model_spec, %{})}
+      end
+    end)
+  end
+
+  def handle_event("select_model", _params, socket), do: {:noreply, socket}
+
+  @impl true
+  def handle_event("select_reasoning_effort", %{"reasoning_effort" => index}, socket) do
+    change_model_selection(socket, &LLMSelection.select_reasoning_effort(&1, &2, index))
+  end
+
+  def handle_event("select_reasoning_effort", _params, socket), do: {:noreply, socket}
 
   @impl true
   def handle_event("select_agent", %{"agent" => id}, socket) do
@@ -1152,7 +1223,7 @@ defmodule EvoDashWeb.ProjectsLive do
         |> StatePersistence.maybe_restore_show_project_settings(params["show_project_settings"])
         |> StatePersistence.maybe_restore_task_archive(params["task_archive"])
         |> StatePersistence.maybe_restore_show_advanced(params["show_advanced"])
-        |> StatePersistence.maybe_restore_assign(:selected_model_id, params["selected_model_id"])
+        |> StatePersistence.maybe_restore_model_selection(params)
         |> StatePersistence.maybe_restore_assign(:selected_agent_id, params["selected_agent_id"])
         |> StatePersistence.maybe_restore_quality_level(params["quality_level"])
 
@@ -1173,10 +1244,43 @@ defmodule EvoDashWeb.ProjectsLive do
 
           project_path = params["project"]
 
-          if is_binary(project_path) and project_path != "" and File.dir?(project_path) do
-            activate_project(socket, project_path)
-          else
-            socket
+          cond do
+            not is_binary(project_path) or project_path == "" ->
+              socket
+
+            not is_nil(socket.assigns[:current_node_id]) ->
+              # Saved remote paths belong to the target filesystem, never the
+              # dashboard host. Activation validates them off-process and patches
+              # the URL, which triggers the correctly scoped picker reload.
+              if ModelSelectionScope.pending_remote?(socket.assigns) or
+                   EvoDashWeb.RemoteGateComponents.gate_active?(socket.assigns) do
+                socket
+              else
+                case ProjectFlow.normalize_remote_project_path(
+                       socket.assigns[:current_node],
+                       project_path
+                     ) do
+                  {:ok, expanded} ->
+                    ProjectFlow.spawn_remote_project_activation(
+                      socket,
+                      expanded,
+                      socket.assigns[:task_resume_from]
+                    )
+
+                  {:error, _reason} ->
+                    socket
+                end
+              end
+
+            File.dir?(project_path) ->
+              # Activation invalidates the initial batch's captured path; replace
+              # it with a fresh generation scoped to the restored project.
+              socket
+              |> activate_project(project_path)
+              |> AsyncLoad.maybe_spawn(socket.assigns[:current_node_id])
+
+            true ->
+              socket
           end
         else
           socket
@@ -1201,6 +1305,14 @@ defmodule EvoDashWeb.ProjectsLive do
     restoring_from = socket.assigns[:foreign_repos_restoring_from]
 
     cond do
+      # A pending remote target still resolves current_node locally. Never
+      # dispatch that remote form to the local registry, even for forged events.
+      socket.assigns[:current_node_id] != nil and
+          (socket.assigns.current_node == node() or
+             EvoDashWeb.RemoteGateComponents.gate_active?(socket.assigns)) ->
+        {:noreply,
+         put_flash(socket, :error, gettext("Connect to the remote node before starting a task."))}
+
       # All task modes now require an active project (reflect mode was
       # removed) — keep the existing "No project selected" guard.
       is_nil(path) ->
@@ -2105,8 +2217,9 @@ defmodule EvoDashWeb.ProjectsLive do
   # the project load produced.
   @impl true
   def handle_info({:foreign_repos_restored, task_id, node, result}, socket) do
-    if task_id != socket.assigns[:task_resume_from] or
-         node != (socket.assigns[:current_node] || node()) do
+    if not is_nil(socket.assigns[:current_node_id]) or
+         task_id != socket.assigns[:task_resume_from] or
+         node != node() or node != (socket.assigns[:current_node] || node()) do
       {:noreply, socket}
     else
       socket = assign(socket, :foreign_repos_restoring_from, nil)
@@ -2180,8 +2293,8 @@ defmodule EvoDashWeb.ProjectsLive do
   end
 
   # Async node-aware loads spawned by AsyncLoad.maybe_spawn/2 in
-  # handle_params/3 (custom agents, model profiles + the selected_model_id
-  # switch validation, remote project config, recent projects + the
+  # handle_params/3 (custom agents, canonical model picker reconciliation,
+  # remote project config, recent projects + the
   # notified-terminal-id seed). The handler drops stale results (wrong node or
   # active project) in AsyncLoad.handle_result/5, which reports whether it
   # applied anything, then:
@@ -2326,6 +2439,14 @@ defmodule EvoDashWeb.ProjectsLive do
   #   - Fresh `%ForeignRepo{}` structs (from an in-memory task)
   #   - Maps with `"root"` key (Jason-decoded from the DB, via `@derive {Jason.Encoder}`)
   #   - Maps with `"path"` key (sessionStorage serialization format, as a fallback)
+  # Remote resume settings are restored by the remote activation task instead.
+  defp start_foreign_repos_restore(
+         %{assigns: %{current_node_id: target_id, current_node: target_node}} = socket,
+         _task_id
+       )
+       when not is_nil(target_id) or target_node != node(),
+       do: socket
+
   defp start_foreign_repos_restore(socket, task_id) do
     node = socket.assigns[:current_node] || node()
     parent = self()
@@ -2804,6 +2925,29 @@ defmodule EvoDashWeb.ProjectsLive do
     end
   end
 
+  # Picker transitions are pure and use only the already-loaded node bundle.
+  # Invalid events leave the current selection intact; explicit choices discard
+  # a pending browser restore so a delayed batch cannot resurrect it.
+  defp change_model_selection(socket, transition) do
+    case ModelSelectionScope.bundle(socket.assigns) do
+      {:ok, bundle} ->
+        case transition.(bundle, socket.assigns[:selected_model_spec]) do
+          {:ok, spec} ->
+            {:noreply,
+             socket
+             |> assign(:selected_model_spec, spec)
+             |> assign(:pending_model_selection, nil)
+             |> StatePersistence.maybe_persist_model_selection()}
+
+          {:error, _reason} ->
+            {:noreply, socket}
+        end
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
   # do_task_submit/4 — builds the start_task opts and launches the task.
   # Called by handle_event("task_submit") AFTER its guards (project open +
   # custom mode has a selected agent). Lives down here with the other
@@ -2870,52 +3014,6 @@ defmodule EvoDashWeb.ProjectsLive do
 
     opts = if archive, do: Keyword.put(opts, :archive, true), else: opts
 
-    # Thread the selected model profile id into opts (if non-nil/non-empty).
-    # An explicit user choice ALSO sets :model_id_locked => true (the
-    # runtime's model-selection script is deferred for this task); when
-    # "Auto (by rules)" is chosen (selected_model_id is nil/"") neither key
-    # is set and the script (or the default model) decides. The lock is set
-    # unconditionally on an explicit choice per the cross-app contract —
-    # it is a no-op when no script is configured.
-    selected_model_id = socket.assigns[:selected_model_id]
-
-    opts =
-      if is_binary(selected_model_id) and selected_model_id != "" do
-        opts
-        |> Keyword.put(:model_id, selected_model_id)
-        |> Keyword.put(:model_id_locked, true)
-      else
-        opts
-      end
-
-    # Thread the selected custom agent id into opts ("Auto (recommended)" /
-    # nil/"" threads nothing — the runtime spawns its default root agent).
-    # Custom Agent mode is validated in handle_event/3 before this point, so
-    # a non-empty agent is guaranteed whenever mode == "custom".
-    selected_agent_id = socket.assigns[:selected_agent_id]
-
-    opts =
-      if is_binary(selected_agent_id) and selected_agent_id != "" do
-        Keyword.put(opts, :agent, selected_agent_id)
-      else
-        opts
-      end
-
-    # Thread the speed ↔ quality selection into opts as :quality_level (STRING
-    # "fast" | "balanced" | "high_quality"). "balanced" is the default — the
-    # key is OMITTED for it so the untouched case keeps opts byte-identical to
-    # before (the core treats absent and "balanced" identically). The SAME
-    # opts go to the remote (NodeContext.start_task) and local
-    # (TaskRegistry.start_task) branches below.
-    quality_level = socket.assigns[:quality_level]
-
-    opts =
-      if quality_level in ["fast", "high_quality"] do
-        Keyword.put(opts, :quality_level, quality_level)
-      else
-        opts
-      end
-
     resume_from = params["resume_from"]
 
     opts =
@@ -2979,16 +3077,20 @@ defmodule EvoDashWeb.ProjectsLive do
       # "Failed to start task" flash (the prompt is NOT cleared in that case).
       # The wrapper is FLATTENED so the result keeps `start_task`'s documented
       # `{:ok, task} | {:error, reason}` shape.
+      # Validate model/agent/quality through the same launch boundary as GitHub
+      # fixes. A stale or unavailable picker fails before either start_task call.
       start_result =
-        case SafeCall.run(fn ->
-               if socket.assigns.remote? do
-                 NodeContext.start_task(socket.assigns.current_node, task_type, opts)
-               else
-                 TaskRegistry.start_task(task_type, opts)
-               end
-             end) do
-          {:ok, start_result} -> start_result
-          {:error, reason} -> {:error, reason}
+        with {:ok, opts} <- LaunchOptions.apply(opts, socket.assigns) do
+          case SafeCall.run(fn ->
+                 if socket.assigns.remote? do
+                   NodeContext.start_task(socket.assigns.current_node, task_type, opts)
+                 else
+                   TaskRegistry.start_task(task_type, opts)
+                 end
+               end) do
+            {:ok, start_result} -> start_result
+            {:error, reason} -> {:error, reason}
+          end
         end
 
       case start_result do

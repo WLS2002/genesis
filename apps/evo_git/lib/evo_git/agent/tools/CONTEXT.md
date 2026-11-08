@@ -6,6 +6,7 @@ LLM tool definitions and implementations for EvoGit agents: each module declares
 ## Routing Table
 - `./skill/` → skill tool modules (SkillAdd, SkillEdit, SkillRemove, SkillList, SkillRead) — detail `skill/CONTEXT.md`
 - `./lsp/` → `EvoGit.Agent.Tools.Lsp.Protocol`, the PURE LSP wire codec (Content-Length framing, JSON-RPC encode, incremental `decode/1`, `file://` URIs, diagnostics/hover/definition normalization; no I/O, ports or processes) — detail `lsp/CONTEXT.md`
+- `./elixir_eval/` → Evaluator security and implementation detail: owner authorization, literal MFA/tier admissions of unchanged real APIs through broker-backed Dune shims, optional narrow Read/Write facades, quotas, worker cleanup and rendering — detail `elixir_eval/CONTEXT.md`; the public wrapper/schema remains in `./elixir_eval.ex`.
 
 ## API Surface
 
@@ -27,9 +28,9 @@ LLM tool definitions and implementations for EvoGit agents: each module declares
 | `lsp` | Language-server code intelligence — `action` ∈ `diagnostics`/`hover`/`definition`, 1-based `line`/`column`, `path` inside the repo; SCHEMA-GATED on `EvoGit.Config.lsp_enabled?/0` (`[lsp] enabled = true` + non-empty `command`), so absent by default while dispatch stays registered | Read | No |
 | `search_context` | Search patterns in CONTEXT.md files | Read | Yes |
 | `search_history` | Search git commit history | Read | Yes |
-| `complete_task` | Agent completion (injected separately, not in the standard schemas) | Special | No |
-| `run_command` | Command STRING through `EvoGit.CommandShell` — task control, user guides, system info (dispatch-registered ONLY; self-reflective agent); level-2/3 commands approval-gated via `EvoGit.CommandApproval` | Special | No |
-| `job_output` | A background job's delta since the previous read + current status (optional bounded `wait`) | Control | No |
+| `elixir_eval` | Assistant-only explicit read/write/sudo Elixir evaluation; read/write use Dune with admitted real APIs or optional facades, write/sudo require exact-code approval | Special | Read/write Dune; sudo NO |
+| `run_command` | Command STRING through `EvoGit.CommandShell` — task control, user guides, system info (legacy command shell; blocked for SelfReflective in favor of `elixir_eval`); level-2/3 commands approval-gated via `EvoGit.CommandApproval` | Special | No |
+| `job_output` | A background job's delta since the previous read + current status (optional bounded `wait`; `job_id` may be omitted when this agent has exactly one job) | Control | No |
 | `job_list` | This agent's background jobs with ids and statuses | Control | No |
 | `job_kill` | Request cancellation of a running background job | Control | No |
 | *(utility)* `Shared` | Anti-duplication home for cross-tool helpers: arg parsing/validation, the duration readers `fetch_duration_ms/2` / `get_duration_ms/3` (the ONE `timeout` parser), path/scope checks, string edits, the single `commit_files/4` stage+commit helper (+ `validate_commit/1`, `maybe_commit_result/6`), `format_datetime/1`, `truncate/2`, `objective_snippet/2`, `tool_output_limit_description/0`, `describe_error/2` | — | — |
@@ -42,6 +43,8 @@ MODEL-FACING names differ from the INTERNAL dispatch keys `execute_tool/5` match
 - Every call uses the same four fields — `name:`, `description:`, `parameter_schema:`, `callback:` — and no tool uses the optional `strict:`/`provider_options:`; `callback` is always the no-op `fn _ -> {:ok, nil} end` (real execution goes through `execute`).
 - `parameter_schema` is a STRING-keyed JSON-Schema map with `"type" => "object"`, `"properties"` and `"required"`; property vocabulary: `type` (`string`/`integer`/`boolean`/`array` — `object` only as the top-level type), `description`, `default` (inside the property map), `enum` (`make_dir` keep-file options, `lsp` actions — the only two) and `items` (string arrays in `make_dir`, `git`, `ripgrep`, `file_create`); no tool declares `additionalProperties`.
 - Descriptions may be built at schema-build time (`shell_tool` `generate_description/0`, platform/config-aware).
+- **Only THREE builders produce config-dependent CONTENT at call time** — `shell_tool.ex` (timeout description interpolating `max_timeout/0` + `@default_timeout`, and `generate_description/0`'s `shell_intro()`/`max_timeout()`), `job_output.ex:126` (`BackgroundJobs.wait_default_ms()` / `wait_max_ms()`) and `web_search.ex` `schema/1` (provider-derived `search_depth`/`max_results`/`timeout`); every other `schema/0` in this node interpolates module attributes only.
+- The tool array is part of the LLM prompt PREFIX, so this content must stay byte-identical across turns: those three read `EvoGit.Config.resolve/0,1` (a `File.stat` mtime+size check + full schema re-validation per call) and `BackgroundJobs` call-time env seams, so a mid-run config.toml/app-env change rewrites schema text and breaks prompt caching; nothing here captures a timestamp, path or id into a schema.
 
 ## Constraints
 - **Unified `timeout` argument contract** — the canonical key is `timeout` (every tool that has one; `job_output` additionally accepts its own `timeout_ms`/`timeoutMs` wait-budget spellings, in that priority order, with `timeout` honoured between them); the value is an integer of MILLISECONDS, a float (truncated), or a numeric string with an optional `ms`/`s`/`m` unit (`"60000"`, `"90s"`, `"30m"`, `"1.5s"`), and an absent, non-positive or unparseable value means "no explicit timeout".
@@ -54,7 +57,7 @@ MODEL-FACING names differ from the INTERNAL dispatch keys `execute_tool/5` match
 - Batches split on `Tools.serial_tool?/1`: the file-mutating subset runs SEQUENTIALLY in the parent agent process, the rest in parallel (`Task.async_stream`, bounded by `max_tool_concurrency`); concurrent shell/git calls can still contend on git's `index.lock`.
 - Write tools get 4 args (incl. `node_path`), read tools 3.
 - `run_git`'s schema is commented out of `schemas/0`; agents use `bash` for git.
-- New tool = module (schema + execute) + alias + dispatch clause + `schemas/0` entry.
+- New identity-named tool needs a module (`schema/0` + `execute`), a dispatcher clause and an explicit schema exposure site; an alias is needed only when its model-facing and dispatch names differ.
 - Exceptions: `run_command` and user-defined custom tools dispatch through their own clause / the `execute_tool/5` catch-all only, never in `schemas/0` or `read_only_schemas/0`, and are opt-in per agent `available_tools/0`.
 
 ## Execution Flow
@@ -141,17 +144,24 @@ Tool failure reasons are rendered through `EvoGit.Agent.Tools.Failure.format_rea
 - Consumer: `ToolDispatch.batch_execute_tools/4` runs the serial subset first, sequentially, in request order, in the parent agent process (`../CONTEXT.md` "Standard tool call execution").
 
 ### Commit Semantics
-**ONE helper: `Shared.commit_files/4`** (`(repo_path, repo_root, files, message) -> {:ok, output} | {:error, message}`).
+**ONE helper: `Shared.commit_files/4,5`** (`(repo_path, repo_root, files, message) -> {:ok, output} | {:error, message}`; `/5` adds an `opts` keyword).
 - It stages ONLY the passed paths (`EvoGit.sandbox_run(repo_path, "git", ["add" | paths], repo_root)`) — never `git add --all`.
 - It commits with `git commit -F <tmpfile>` on the same sandbox path; the co-author trailer is appended only when `[:git, :co_authored_by_enabled]` is not `false` (never a hardcoded user), and the message always rides a file, never `-m` argv.
 - `{:ok, output}` is the concatenated add+commit output; `{:error, message}` is `"Error: git add failed (exit N): …"` / `"Error: git commit failed (exit N): …"`.
 - Graceful no-ops: an empty file list returns `{:ok, "No files to commit"}` with no git call, and nothing staged returns `{:ok, output}`. Recognition uses git's exit-1 `@nothing_to_commit_markers` wordings ("nothing to commit, working tree clean", "nothing added to commit", "no changes added to commit") and is locale-stable thanks to `LC_ALL=C`.
+- `commit_files/5` adds a keyword `opts` whose only recognised key is `amend: true` (default `[]`); `/4` delegates to `/5` with `[]`, so existing callers keep plain per-call commits.
+- `amend: true` squashes into HEAD instead of creating a commit, and only when `files` holds EXACTLY ONE path — the amend path returns the same `{:ok, add+amend output} | {:error, message}` contract.
+- Amend runs `git commit --amend --only -F <tmpfile> -- <repo-relative path>` through the same `-F` message plumbing (`--only` keeps unrelated staged content out of the amended commit; the path is repo-relative, never absolute, to avoid MSYS2 backslash mangling).
+- Amend is ATTEMPTED only when all four `amendable_context_head/3` conditions hold, each via `run_sandboxed_git/3`: HEAD has exactly one parent (never a merge commit), HEAD's `diff-tree --name-only` is exactly the repo-relative normalized path being committed, HEAD's subject starts with the literal `"Update CONTEXT.md for "` (the subject the CONTEXT tools write), and HEAD is PRIVATE to the current branch (`for-each-ref --contains HEAD` returns exactly `git symbolic-ref HEAD`).
+- The private-branch rule is load-bearing: a subagent worktree branches off its parent's HEAD, so amending a commit still contained in the parent's branch, `main` or a remote-tracking ref would rewrite the base the ContextMerge octopus merge and the review flow depend on.
+- Any git failure, non-zero exit or unparsable output in that check is a plain `:error` → the plain commit runs; a failed `--amend` likewise falls back to the plain commit, and an identical-content amend is a graceful exit-0 no-op in git.
 
 Tools that commit their own write:
 - `create_files` stages exactly the LLM-supplied paths (a new untracked ancestor directory, or a path tracked in a parent/spatial node, is not staged).
 - `make_dir` stages only the keep-files it created (`keep_file: "none"` → no commit).
-- `write_context`/`edit_context` stage their own CONTEXT.md, append `"\n\nCommitted:\n" <> output` on success (else the helper's message verbatim) and honour `commit: false` (default true).
+- `write_context`/`edit_context` are the ONLY amend opt-in (`Shared.commit_files(repo_path, repo_root, [relative_path], message, amend: true)`): they stage their own CONTEXT.md, append `"\n\nCommitted:\n" <> output` on success (else the helper's message verbatim), honour `commit: false` (default true), and consecutive same-file edits amend the previous auto context commit instead of stacking one-file commits.
 - The five skill writers use `Shared.maybe_commit_result/6` (schema `commit`, default true): one commit for the paths written/removed plus the same appended block; `:already_enabled_here`/`:already_enabled_above`/`:not_enabled` and errors commit nothing (`skill/CONTEXT.md`).
+- `create_files`, `make_dir` and the skill writers stay on plain `commit_files/4`: one commit per call, never squashed across calls.
 - `write` and `edit` NEVER commit — their bytes land only via a later commit.
 
 Auto-commit fallback: `Dispatch.commit_pending_in_worktree/0` runs `git add --all` + `Git.commit(wt, "Agent: auto-commit fallback")`, short-circuiting on a clean worktree and warning (not raising) on git errors.
@@ -164,12 +174,12 @@ Every tool read/write is rooted at `repo_path`, so writes land in the tree the a
 Loss windows (no commit lands): `:brutal_kill` and VM shutdown (they skip `Runner.run/3`'s `after`), worktree reclaim/destroy, and the primary-repo boot wipe of orphaned `evogit-agent-*` branches; only `refs/genesis/archive/T<task>-A<local>-start|-final` survive.
 There is no per-turn commit; per-turn git activity is only the ETS `phylo_node.current_commit` sync.
 
-### CompleteTask attribution metadata (git notes + archive rows)
-`CompleteTask.complete/4` (from `ToolDispatch.do_complete/2` with `base_commit`/`parent_id`/`depth`/`objective`) writes two artifacts, both gated on a truthy `base_commit` (repo-less agents write neither):
-- **Git note** (`add_metadata_note/4`, `git notes --ref=evogit` on the final commit): pretty-JSON with EXACTLY `agent_id, base_commit, final_commit, parent_id, depth, objective, result, usage, completed_at, agent_type, context_node_path`, read via `get_agent_metadata/2` (`{:error, {:no_note, _}}` / `{:error, {:invalid_json, _}}` shapes). Notes attach to the commit OBJECT, so merged child commits keep them (the merge commit carries none) and in a fast-forward the child notes are the only attribution. No caller in lib and no dashboard/RPC reader.
+### Completion attribution metadata (git notes + archive rows) — `EvoGit.Agent.Completion`, NOT a tool
+`EvoGit.Agent.Completion.complete/4` (`../completion.ex`) is called by `ToolDispatch.build_completion/2,3` with the finish text and the `base_commit`/`parent_id`/`depth`/`objective` captured there, and writes two artifacts, both gated on a truthy `base_commit` (repo-less agents write neither):
+- **Git note** (`add_metadata_note/3`, `git notes --ref=evogit` on the final commit): pretty-JSON with EXACTLY `agent_id, base_commit, final_commit, parent_id, depth, objective, result, usage, completed_at, agent_type, context_node_path`, read via `get_agent_metadata/2` (`{:error, {:no_note, _}}` / `{:error, {:invalid_json, _}}` shapes). Notes attach to the commit OBJECT, so merged child commits keep them (the merge commit carries none) and in a fast-forward the child notes are the only attribution. No caller in lib and no dashboard/RPC reader.
 - **Archive rows** (`write_archive_refs/7`, additionally gated on the task opt `archive: true`, default false): protected refs `refs/genesis/archive/T<task_id>-A<task_local_id>-start|-final` at the base/final commits, plus ONE `task_agent_archives` row written STREAMING — `TaskRegistry.put_task_archive/1` → `Store.put_task_archive/2`, keyed `(task_id, agent_id)` so a repeat write upserts.
   Row columns: `agent_id, parent_id, depth, agent_type, context_node_path, objective, result, base_commit, final_commit, branch_name, archive_ref_start, archive_ref_final, repo_id, repo_root, repo_path, usage, llm_settings, agent_settings, foreign_repos, compression_count, started_at, completed_at`.
-  Nothing is buffered in memory or collected at task end, and the archive never rides `%Result{}` or the task's `result`; a persistence failure returns `{:error, term}` and the tool still completes.
+  Nothing is buffered in memory or collected at task end, and the archive never rides `%Result{}` or the task's `result`; a persistence failure logs a warning and the run still completes with its `%Result{}`.
   Reads: `Store.list_task_archives/3` (roster, `result` omitted) and `Store.get_agent_archive/3` (one agent, `result` included).
 
 These plus the live ETS summary (`RemoteAPI.list_agents/0`: `base_commit`/`current_commit`/`parent_id`/`depth`/`task_local_id`) are the only per-agent spawn/merge data sources.
@@ -208,6 +218,8 @@ The backend is `EvoGit.BackgroundJobs` (`lib/evo_git/background_jobs.ex`, superv
 - `bash` param `run_in_background` (boolean, no `"default"` key): truthy → the same main-copy guard, then `start_job/1` with `command:`, `cwd: repo_path`, `repo_root:`, `label:` (first line trimmed to 60 chars), `owner_pid: BackgroundJobs.current_owner_pid()`, `agent_id: Process.get(:evogit_agent_id)` and `task_id: Process.get(:evogit_task_id)`; success returns `started background job <id>`, failure `Failure.error/1` prose, and `timeout` is ignored.
 - The generated `bash` description's background paragraph states the same contract model-facing: a `run_in_background: true` start has NO timeout (and ignores `timeout`), and a job expected to take a while should be collected with ONE long `job_output` wait (e.g. `timeout: "30m"`, up to the ~30 min cap, default 120 s) instead of re-polling with short budgets.
 - Owner fence: `current_owner_pid/0` (`Process.get(:evogit_agent_pid)`) is the ONE resolution site and is passed to `read/2`/`list/1`/`kill/3` only when non-nil.
+- Job ids are SHORT and predictable: `BackgroundJobs` renders `@id_prefix` plus a per-registry monotonic counter (`bash-1`, `bash-2`, …), skipping any candidate already held by `state.jobs` (retained finished records are capped, live ones never pruned), so `bash-<n>` is what the agent repeats and what `Sandbox.Background.unit_name/1` embeds.
+- `job_output` `job_id` is OPTIONAL: an explicit non-blank id is used as-is; a missing/blank/non-string one resolves THIS agent's own jobs (`list(owner_pid: current_owner_pid())`) — exactly one job is read as if its id had been passed (full `wait`/budget/`max_bytes` behaviour), zero jobs and several jobs are actionable `Error:` prose, and the several-jobs one names every id with status and label, newest first (at most 10, then `… and N more`), never advancing a read cursor. A nil owning pid keeps the explicit-id error rather than defaulting to an unscoped lookup.
 - `job_output` returns the delta since the previous read, a newline, then `"[status: <status>]"` or `"[status: <status>, <detail>]"` (`detail` = `exit code: N`, `killed (<reason>)`, …); an empty delta renders `(no new output)` and `max_bytes` defaults to `[:truncation, :tool_output_default_max_bytes]`.
 - `job_output` `wait: true` polls `job/2` IN THE TOOL TASK (never in the registry) until the status is terminal (`status not in [:running, :stopping]`), the owning agent is gracefully cancelled, or the deadline passes; a timed-out wait returns the delta so far and leaves the job RUNNING.
 - Poll cadence BACKS OFF exponentially: the first sleep is `poll_interval_ms()` (the call-time app-env seam `:background_poll_interval_ms`, production default 100 ms), then ×1.5 per poll capped at 3_000 ms (`JobOutput.next_poll_delay/2`, `@poll_backoff_cap_ms`; a 0 ms base is floored to 1 so the loop never spins), so a fast job is still observed promptly while a full ~29.6 min wait costs ~599 registry probes instead of ~17 750 at a fixed 100 ms — each `:unit` probe is a SYNCHRONOUS `systemctl --user show` in the single GLOBAL registry. The deadline still bounds the wait, so poll overhead never extends it (measured 3046 ms for a 3000 ms budget).
@@ -218,6 +230,7 @@ The backend is `EvoGit.BackgroundJobs` (`lib/evo_git/background_jobs.ex`, superv
 - When `wait: true` reads successfully, ONE marker line follows the byte-identical `[status: …]` line: `[wait: finished after <elapsed_ms> ms, status: <status>]` when the job the read returns is terminal, `[wait: aborted after <elapsed_ms> ms — cancellation requested, status: <status>]` when a graceful cancel ended it, else `[wait: <budget_ms> ms budget expired, status: <status>]` for an explicit budget, or `[wait: <budget_ms> ms budget expired, status: <status>; pass timeout_ms (or timeout) to wait up to <wait_max_ms> ms ("<human>")]` for the default budget; `<elapsed_ms>` is the measured wait loop, `<budget_ms>` the CLAMPED budget actually used, and `<human>` the same cap rendered as `<n>m` for a whole number of minutes, `<n>m<n>s` when the minutes leave a remainder, else `<n>s` (`"29m35s"` and `"1m"` for 1 775 000 / 60 000 ms caps, `"8s"` below a minute) — both rendered from `wait_max_ms/0` at call time, never a literal.
 - That marker is what makes a short wait diagnosable: a silently-defaulted budget would otherwise produce a result byte-identical to a satisfied wait, reading as a slow clock instead of a rejected argument. `wait: false` and `Error: …` replies carry no marker, and `status_line/1` is untouched.
 - The `job_output` dispatch ceiling is derived at CALL time as `BackgroundJobs.wait_max_ms() + BackgroundJobs.dispatch_headroom_ms()` — never a hand-written literal — so it lands exactly on `[:scheduler, :max_tool_timeout]` (1_800_000 ms by default) and an honoured budget can never be cut off by the generic dispatch timeout.
+- The output file is CREATED/TRUNCATED to empty at start (`File.write(path, "")`, never a bare `touch`), because a short reused id in a reused scratch dir must never leak a previous job's bytes; ids are safe as systemd unit-name components.
 - `job_list` takes no params and emits one `<id> [bash] <status> — <label>` line per job (EM DASH U+2014), else `(no background jobs)`.
 - `job_kill` takes an optional `reason` and returns `requested cancellation of job <id>`, or `job <id> had already finished [status: …, <detail>]` for a finished job (the `{:already_finished, job}` tuple, not an error); either reply marks the job announced (no completion notice for a job the agent itself killed), while a `job_output` call afterwards still returns the output produced before the kill.
 - `JobOutput.status_line/1` (`@doc false` public) is the ONE status formatter, reused by `JobKill`.
@@ -257,7 +270,13 @@ Every tools-node commit uses `git commit -F <tempfile>`, never `-m <message>` ar
 - Approval gate: registry entries carry `level:`; level-2/3 commands pause at the dispatch choke point awaiting `EvoGit.CommandApproval.request/5` (blocking; PubSub `"approvals"`; default 120 s via `[:evo_git, :command_approval_timeout]`), run ONLY on `:approved` and fail closed on deny/timeout; level-1 commands run immediately.
 - The 10 command handlers keep `execute/3` and are called as `apply(module, :execute, [string_keyed_args, nil, nil])` (no schema, no dispatch clause): `ListTasks`, `GetTask`, `StartTask`, `CancelTask`, `ForceKillTask`, `DeleteTask`, `SpawnInvestigator`, `GuideUser`, `ListRecentProjects`, `SystemInfo`.
 - Handler output is a binary or `{:error, message}`: binary → `{:ok, output}`; `{:error, binary}` → propagated as a shell error; anything else → `{:error, "Unexpected handler output: #{inspect(output)}"}`.
-- Handlers never raise (task-system calls wrap `rescue`/`catch :exit` for `:noproc` and 30 s call timeouts, returning `"task system unavailable: ..."`).
+- `RunCommand.safe_execute/1` is the outer rescue/`:exit` boundary; `ListTasks`, `GetTask`, `StartTask` and `ListRecentProjects` also rescue/catch their registry calls, while `CancelTask`, `ForceKillTask` and `DeleteTask` catch ONLY `:exit` and rely on the outer boundary for exceptions.
+- Handler `execute/3` functions contain NO approval check and NO owning-task/self-target check; direct calls bypass the command-shell confirmation policy entirely.
+- Every task-control handler uses the LOCAL `EvoGit.TaskRegistry`, ignores both repository-path arguments and has no node selector, so switching a dashboard's selected remote node does not retarget these handlers.
+- `CancelTask`/`ForceKillTask`/`DeleteTask` accept any nonblank task id, including the calling agent's own task id; a self-force-kill can destroy the caller before its result is returned, and a self-cancel requests the ordinary grace path rather than synchronously finishing it.
+- `DeleteTask.execute/3` reports success for the fire-and-forget registry cast without checking existence, status or completed deletion; its string is not an acknowledgement of persisted removal.
+- `ListTasks` reads the entire `list_tasks_summary(statuses)` collection without a limit and `ListRecentProjects` formats the entire returned collection; `GetTask` fetches the FULL task before trimming objective/result to 2,000 characters, so these are useful inspection APIs but not bounded read primitives.
+- Approval, cancellation and generic execution deadlines live OUTSIDE these handlers in `EvoGit.CommandShell`, `EvoGit.CommandApproval` and `EvoGit.Agent.ToolDispatch`; none of the task-control handlers polls cancellation, installs a timeout or rolls back a mutation after the caller times out.
 - `GuideUser` uses `with` without `else`, so its validation failures return `{:error, message}` tuples on direct `execute/3` calls (test-pinned), while through the shell `parse_args` rejects missing args first.
 - `SpawnInvestigator` normalizes EVERY failure through `Failure.error/1`, so it always returns a plain single-`Error:` string (never a tuple).
 
@@ -286,6 +305,31 @@ A real Investigator agent run stays blocked by the level-1 ~10 s tool timeout (a
 
 **Security constraints**: compile-time literal registry (no `Code.eval_string`, no input-derived module/function names), no `String.to_atom/1` on input (enums/bools/statuses validated against literal lists and passed as strings), whitelist-only dispatch, and guardrails `@max_command_length` 4000 / `@max_tokens` 40 / `@max_token_length` 2000.
 To add a command: a handler `execute/3` plus ONE registry entry (including its `level:`) — no schema, no dispatch clause.
+
+### Assistant Elixir evaluator (`elixir_eval`)
+`EvoGit.Agent.Tools.ElixirEval` (`elixir_eval.ex`) exposes `schema/0`, `execute/3`, persona-facing `help/0`, `authorized_assistant?/0` and `authorize/0,1`.
+`help/0` teaches source inspection with `read`/`glob`/`rg` followed by explicitly admitted real calls, with fully qualified `EvoGit.TaskRegistry.list_tasks_page(limit: 10)`, `EvoGit.AgentScheduler.get_config(:max_turns)` and approval-gated, runtime-only `EvoGit.AgentScheduler.update_config(max_tool_concurrency: 8)` examples.
+Public help incorporates `DirectAPI.help/0` exactly once; that function owns the detailed direct catalog, whose admitted set grants authority rather than all public APIs.
+Owner authorization, direct/facade signatures, security boundaries, quotas and cleanup are owned by `elixir_eval/CONTEXT.md`, not duplicated here.
+Required `code` is nonblank valid UTF-8, at most 16000 BYTES at this public wrapper (the internal engine ceiling is 16384), and reaches approval and the engine byte-identically.
+`tier` is an explicit string enum `read` (default), `write` or `sudo`; refusal never triggers automatic escalation.
+`target_node`, when supplied, must be a STRING equal to `current`, `local` or the exact current node name; explicit nil, atoms and remote targets are rejected.
+`timeout_ms` and `max_output_bytes` accept only POSITIVE INTEGERS: timeout defaults to 2000 ms and clamps to 5000 ms, output defaults to 16384 bytes and clamps to 256..65536 bytes, including errors and truncation markers.
+Read/write use literal module/function/arity/tier admissions that invoke the actual public APIs unchanged through broker-backed Dune shims, not facade projections, redaction or added argument validation; no admission grants an entire namespace.
+Read admissions are available in both read and write tiers; examples include `EvoGit.TaskRegistry.get_task/1`, `EvoGit.AgentScheduler.RemoteAPI.list_agents/0` and `EvoGit.Config.resolve/0,1`, with the exact catalog owned by the child context and `DirectAPI`.
+Direct reads are NOT projected or secret-safe and are not necessarily collection-bounded; execution/output limits bound resource use, not disclosure, and truncation is not redaction.
+`EvoGit.Agent.Tools.ElixirEval.Read` / `EvoGit.Agent.Tools.ElixirEval.Write` remain optional narrow facades, not the sole path, and interpreted `alias/1` declarations are unsupported.
+`EvoGit.Agent.Tools.ElixirEval.Read.list_tasks()` uses defaults and `EvoGit.Agent.Tools.ElixirEval.Read.list_tasks(map)` accepts pagination/filter options; `help/0` provides fully qualified examples.
+Each call has fresh bindings; reading source or finding a public API does not admit it.
+The threat model is accidental self-corruption, not a malicious attacker: write requires exact-code approval for bounded admitted capabilities, distinct from separately approved unrestricted native sudo.
+Write/sudo require exact-code approval through `EvoGit.CommandApproval.request_eval/5`, execute only on `:approved`, and revalidate authority before approval, immediately before execution and after any engine result.
+Persistence IS admitted in write tier via `EvoGit.Config.save_user_config/1`, alongside explicit writes such as `EvoGit.TaskRegistry.start_task/2` and `EvoGit.AgentScheduler.update_config/1`; there is no blanket config-persistence exclusion.
+`EvoGit.Config.resolve/0,1` reads defaults plus user configuration, NOT live runtime overrides; `EvoGit.AgentScheduler.update_config/1` changes runtime state only.
+`EvoGit.Config.save_user_config/1` validates and replaces the WHOLE config file and invalidates its cache but does not reload the scheduler: read/modify/save the full map to preserve unrelated settings, then explicitly call `EvoGit.AgentScheduler.RemoteAPI.reload_config/0` and inspect its result.
+Saving a resolved map materializes defaults in the file, and concurrent saves can lose edits.
+Sudo is DANGEROUS UNSANDBOXED full VM evaluation with server permissions, not OS root elevation, best-effort caps and no rollback; unexpected failures withhold raw exception/exit/throw details.
+Neither write nor sudo can roll back committed effects.
+The evaluator's approval wait is separate from its execution budget; dispatch must allow the approval window instead of imposing the generic short tool timeout.
 
 ### StartTask opt-forwarding surface (shell task-start data plane)
 `StartTask.start_task` forwards `:objective` (positional 2, default `""`), `:path`, `:mode`, `:resume_from`, `:starting_commit` and `:model_id` (raw strings via `maybe_put`, nil/`""` dropped) plus, for `:genesis` only, the same positional text under `:prompt` (the key the genesis executor reads).

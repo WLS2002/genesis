@@ -3,8 +3,8 @@ defmodule EvoGit.Agent.ToolDispatch do
   Core tool-execution and LLM-turn logic extracted from `EvoGit.Agent.__using__/1`.
 
   Handles the main agent turn cycle: LLM call with retry, tool-call processing
-  (complete vs regular, subagent vs standard), batching, timeout management,
-  output sanitization, and redundant-cd warnings.
+  (subagent vs standard), batching, timeout management, output sanitization, and
+  redundant-cd warnings.
 
   ## Multimodal tool outputs (the wrap boundary)
 
@@ -26,31 +26,31 @@ defmodule EvoGit.Agent.ToolDispatch do
 
   The turn ends when the model STOPS calling tools — a text reply with zero tool
   calls is an IMPLICIT COMPLETION, exactly like the reference harness the models
-  are trained on (`EvoGit.Agent.CompletionProtocol` classifies each response):
+  are trained on (`EvoGit.Agent.CompletionProtocol` classifies each response).
+  There are exactly two outcomes:
 
-    * tool calls present → execute them and continue the loop (the model may
-      still call `complete_task` explicitly — that tool stays fully functional,
-      including its dirty-workspace gate, archive refs and git note);
+    * tool calls present → execute them and continue the loop;
     * ZERO tool calls with usable text → `implicit_complete/2` commits any
-      pending work and builds the SAME `%EvoGit.Agent.Result{}` the explicit
-      route builds, so scheduler result handling, `merge_and_report`, the
+      pending work and builds the `%EvoGit.Agent.Result{}`; that reply text IS
+      the report, and scheduler result handling, `merge_and_report`, the
       `genesis/agent_*` review branch, task persistence and the dashboard are
-      all unchanged;
-    * ZERO tool calls and no usable text (an empty provider response) → one
-      nudge, then the unchanged bounded protocol-violation path
-      (grace/recovery), so a genuinely broken turn still cannot spin forever.
+      all unchanged.
 
-  `complete_task` is therefore a supported, OPTIONAL tool rather than the only
-  way to finish.
+  The only other path is an error one: ZERO tool calls and no usable text (an
+  empty provider response) gets exactly one nudge, then the unchanged bounded
+  protocol-violation path (grace/recovery), so a genuinely broken turn still
+  cannot spin forever.
+
+  There is NO completion tool: finishing is always the implicit text reply.
   """
   require Logger
 
+  alias EvoGit.Agent.Completion
   alias EvoGit.Agent.CompletionProtocol
   alias EvoGit.Agent.Compression.Threshold
   alias EvoGit.Agent.ConflictState
   alias EvoGit.Agent.LoopState
   alias EvoGit.Agent.ToolInvocation
-  alias EvoGit.Agent.Tools.CompleteTask
   alias EvoGit.Agent.OutputSanitizer
   alias EvoGit.Agent.ToolOutput
   alias EvoGit.Agent.SubagentSchemas
@@ -61,11 +61,9 @@ defmodule EvoGit.Agent.ToolDispatch do
 
   import ReqLLM.Context, only: [user: 1, tool_result: 3]
 
-  @complete_tool "complete_task"
-
-  # Extra per-call headroom (ms) granted on top of the approval window for
-  # level-2/3 `run_command` calls so the handler can execute AFTER the user
-  # approves, before the tool task is killed.
+  # Extra per-call headroom (ms) after approval for elixir_eval write/sudo:
+  # covers the engine's 5s execution cap plus bounded cleanup/authorization.
+  # Also retained for legacy level-2/3 run_command timeout compatibility.
   @approval_execution_buffer 30_000
 
   # Maximum consecutive EMPTY-response nudges before ending the turn gracefully.
@@ -781,13 +779,10 @@ defmodule EvoGit.Agent.ToolDispatch do
     if completion_text do
       # Implicit completion: the bookkeeping above already recorded the turn
       # (including the final assistant message in the context), so all that is
-      # left is the completion side effects shared with explicit `complete_task`.
+      # left is the completion side effects in `EvoGit.Agent.Completion`.
       {:ok, build_completion(state, completion_text)}
     else
       case process_tool_calls(tool_calls, state, subagent_modules) do
-        {:complete, final_result} ->
-          {:ok, final_result}
-
         {:continue, tool_responses, subagent_usage} ->
           continue_after_tools(
             tool_responses,
@@ -887,9 +882,9 @@ defmodule EvoGit.Agent.ToolDispatch do
     if EvoGit.Agent.grace_period_continue_failed?(state) do
       {:error, :recovery_failed}
     else
-      # A turn ended without complete_task: if in a grace period, consume one
-      # grace turn (decrement grace_turns_remaining). Outside a grace period
-      # this is a no-op (counter stays at its default 0).
+      # A turn ended without finishing the run: if in a grace period, consume
+      # one grace turn (decrement grace_turns_remaining). Outside a grace
+      # period this is a no-op (counter stays at its default 0).
       state = consume_grace_turn(state)
 
       # Pick up updated delegation hints from tool execution
@@ -950,7 +945,7 @@ defmodule EvoGit.Agent.ToolDispatch do
   end
 
   # Consumes one grace turn: decrements `grace_turns_remaining` when the agent
-  # is in a grace period (a turn ended without `complete_task`). Outside a
+  # is in a grace period (a turn ended without finishing the run). Outside a
   # grace period the counter stays at its default 0. Only reached when
   # `grace_period_continue_failed?/1` returned `false` (i.e. remaining > 1), so
   # the decremented value is always >= 1.
@@ -1048,13 +1043,7 @@ defmodule EvoGit.Agent.ToolDispatch do
 
   def process_tool_calls(tool_calls, %LoopState{} = state, subagent_modules)
       when is_list(tool_calls) and tool_calls != [] do
-    complete_call = Enum.find(tool_calls, &(ReqLLM.ToolCall.name(&1) == @complete_tool))
-
-    if complete_call do
-      handle_complete_call(complete_call, state, tool_calls)
-    else
-      process_regular_tool_calls(tool_calls, state, subagent_modules)
-    end
+    process_regular_tool_calls(tool_calls, state, subagent_modules)
   end
 
   @doc false
@@ -1074,93 +1063,7 @@ defmodule EvoGit.Agent.ToolDispatch do
     end
   end
 
-  @doc false
-  def handle_complete_call(complete_call, %LoopState{in_grace_period: grace} = state, tool_calls) do
-    case ToolInvocation.arguments(complete_call) do
-      {:ok, complete_args} when is_map(complete_args) ->
-        finish_complete_call(complete_args, state, tool_calls, grace)
-
-      {:error, reason} ->
-        invalid_complete_arguments(tool_calls, reason)
-
-      {:ok, _raw_arguments} ->
-        # The tolerant parse handed back a raw (unparseable) string: there is no
-        # `result` / `check_git_status` to read, so ask the model to re-issue the
-        # call instead of silently completing with a placeholder result.
-        invalid_complete_arguments(
-          tool_calls,
-          "the arguments could not be decoded as a JSON object"
-        )
-    end
-  end
-
-  # A `complete_task` call whose arguments do not decode must not complete the
-  # turn with a fabricated result, and must not crash on `Map.get/2` with nil:
-  # answer every call in the batch with the standard invalid-arguments result so
-  # the model can self-correct on the next turn (mirroring the dirty-workspace
-  # path, which also answers EVERY call to keep the tool-call/result pairing).
-  defp invalid_complete_arguments(tool_calls, reason) do
-    {:continue, error_tool_responses(tool_calls, ToolInvocation.invalid_arguments_result(reason)),
-     nil}
-  end
-
-  defp finish_complete_call(complete_args, state, tool_calls, grace) do
-    # Check if git status validation is enabled (default: true).
-    # During the grace period, skip the dirty workspace check entirely: the
-    # agent gets exactly one recovery turn, and a dirty workspace would return
-    # {:continue, ...} → grace_period_continue_failed?/1 → :recovery_failed.
-    # That deadlocks the agent (it can neither commit nor complete). The
-    # priority during the grace turn is salvaging whatever is already
-    # committed — the :end/:critical warnings already prompted a commit.
-    check_git_status =
-      not state.in_grace_period and
-        Map.get(complete_args, "check_git_status") != false
-
-    # Repo-less agents never write to disk, so the dirty-workspace check is
-    # skipped entirely (the real Genesis source root being dirty is irrelevant,
-    # and a dirty real repo would wedge completion with warnings).
-    if Process.get(:repo_less) == true or grace or not check_git_status do
-      do_complete(complete_args, state)
-    else
-      repo_path = Process.get(:repo_path)
-
-      case CompleteTask.check_workspace_dirty(repo_path) do
-        {:dirty, warning_msg} ->
-          Logger.warning(
-            "Agent #{state.agent_id}: Workspace is dirty at completion. Warning: #{warning_msg}"
-          )
-
-          {:continue, error_tool_responses(tool_calls, warning_msg), nil}
-
-        {:clean, _} ->
-          do_complete(complete_args, state)
-      end
-    end
-  end
-
-  # One tool result per call in the batch carrying `message` — keeps the
-  # tool-call / tool-result pairing intact (a missing result for any call in the
-  # batch causes provider API errors).
-  defp error_tool_responses(tool_calls, message) do
-    Enum.map(tool_calls, fn call ->
-      tool_call_id = call.id || ReqLLM.ToolCall.name(call) || "unknown"
-      tool_result(tool_call_id, ReqLLM.ToolCall.name(call), message)
-    end)
-  end
-
-  # The EXPLICIT completion route (`complete_task`): sync the worktree commit,
-  # then build the result. Its dirty-workspace gate was already applied by
-  # `finish_complete_call/5`.
-  defp do_complete(complete_args, %LoopState{} = state) do
-    # Sync the current commit before completing
-    commit_sha = sync_and_get_current_commit(state)
-
-    result = Map.get(complete_args, "result", "Task finished.")
-
-    {:complete, build_completion(state, result, commit_sha)}
-  end
-
-  # The IMPLICIT completion route (a text reply with no tool calls).
+  # The completion route (a text reply with no tool calls).
   #
   # Any pending work is committed FIRST so the sha reported to the runtime is
   # reviewable: without this the commit would only happen in `Runner.run/3`'s
@@ -1169,28 +1072,26 @@ defmodule EvoGit.Agent.ToolDispatch do
   # drop the work with the worktree. `commit_pending_in_worktree/0` is a no-op
   # for a clean workspace and for repo-less agents, and it never raises (git
   # errors are logged, not propagated), so it cannot turn a legitimate finish
-  # into a failure. The explicit dirty-workspace gate is deliberately NOT
-  # applied here — the model has finished; there is nothing to correct.
+  # into a failure.
   defp build_completion(%LoopState{} = state, result) do
     AgentScheduler.Dispatch.commit_pending_in_worktree()
     build_completion(state, result, sync_and_get_current_commit(state))
   end
 
-  # Shared completion builder for BOTH routes: identical `%Result{}` shape and
-  # identical side effects (git note when `base_commit` is set, archive refs when
-  # archiving), so every downstream consumer is oblivious to how the agent
-  # finished.
+  # Builds the `%Result{}` and writes its completion side effects (git note when
+  # `base_commit` is set, archive refs/row when archiving), so every downstream
+  # consumer is oblivious to how the agent finished.
   defp build_completion(%LoopState{} = state, result, commit_sha) do
     # Get metadata from agent state
     {:ok, agent_state} = AgentScheduler.get_agent_state(state.agent_id)
     depth = AgentScheduler.current_depth()
 
     # Repo-less agents have a nil phylo_node — passing nil base_commit is safe:
-    # CompleteTask.complete/4 guards git-note/archive writes on base_commit
+    # Completion.complete/4 guards git-note/archive writes on base_commit
     # being truthy, so both are skipped for repo-less agents.
     base_commit = if Process.get(:repo_less), do: nil, else: agent_state.phylo_node.base_commit
 
-    CompleteTask.complete(
+    Completion.complete(
       state.agent_id,
       result,
       commit_sha,
@@ -1205,6 +1106,7 @@ defmodule EvoGit.Agent.ToolDispatch do
       repo_root: agent_state.repo_root,
       llm_model: agent_state.llm_model,
       model_id: agent_state.model_id,
+      model_spec: Map.get(agent_state, :model_spec),
       llm_generation_params: agent_state.llm_generation_params,
       max_turns: agent_state.max_turns,
       max_retries: agent_state.max_retries,
@@ -1560,14 +1462,12 @@ defmodule EvoGit.Agent.ToolDispatch do
 
     tool_timeout =
       if approval_window_tool_call?(name, args) do
-        # A level-2/3 `run_command` call BLOCKS inside the command shell while
-        # the user approves/denies it in the /help chat (EvoGit.CommandApproval,
-        # app-env `[:evo_git, :command_approval_timeout]`, default 120s). The
-        # 10s default per-call timeout would kill the task mid-wait, so give
-        # approval-requiring calls a per-call timeout that covers the approval
-        # window PLUS handler execution — still capped by the scheduler's
-        # `max_tool_timeout` (30 min). Level-1 `run_command` calls keep their
-        # exact current behavior.
+        # Write/sudo elixir_eval waits for exact-code approval before evaluation.
+        # Floor even an explicit outer `timeout` to the approval window plus
+        # execution/cleanup headroom; `timeout_ms` is ONLY the inner engine cap.
+        # The configured scheduler max remains authoritative, even if shorter
+        # than the approval window. Read/invalid tiers get no approval floor.
+        # Legacy run_command timeout policy is retained despite refused dispatch.
         approval_timeout = EvoGit.CommandApproval.timeout()
         tool_timeout |> max(approval_timeout + @approval_execution_buffer) |> min(max_timeout)
       else
@@ -1814,12 +1714,14 @@ defmodule EvoGit.Agent.ToolDispatch do
     end
   end
 
-  # True when the tool call is a `run_command` whose command path has security
-  # level >= 2 (EvoGit.CommandShell.security_level/1) — i.e. the command will
-  # BLOCK awaiting interactive user approval inside the shell, so the per-call
-  # timeout must cover the approval window plus execution. Cheap peek: the
-  # command path is the first whitespace-delimited token of args["command"];
-  # unparsable/unknown paths report level 1 (they fail dispatch fast).
+  # Only exact valid write/sudo tiers can wait on evaluator approval. Missing
+  # tier means read; invalid values fail fast in the tool without this floor.
+  defp approval_window_tool_call?("elixir_eval", %{"tier" => tier})
+       when tier in ["write", "sudo"],
+       do: true
+
+  # Legacy timeout compatibility only: Tools.execute/5 refuses run_command.
+  # Command paths at level >= 2 historically waited for interactive approval.
   defp approval_window_tool_call?("run_command", %{"command" => command})
        when is_binary(command) do
     first_token = command |> String.trim() |> String.split(~r/\s+/, parts: 2) |> hd()

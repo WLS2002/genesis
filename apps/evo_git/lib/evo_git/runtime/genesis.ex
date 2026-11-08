@@ -155,7 +155,7 @@ defmodule EvoGit.Runtime.Genesis do
 
     Do NOT treat this as "finish the architect's current task." Treat this as "deliver the complete codebase that the original objective asked for." You OWN the outcome. If something is incomplete, implement it. If something is broken, fix it. If something is missing, create it. Keep going until the original objective is fully and completely realized.
 
-    Call complete_task only when the codebase is complete, functional, and polished — when you can confidently say the original objective has been 100% delivered.
+    Finish only when the codebase is complete, functional, and polished — when you can confidently say the original objective has been 100% delivered. To finish, reply with your final report: a reply with no tool calls ends the run and its text IS the report.
     """
 
     manager_spec =
@@ -256,7 +256,7 @@ defmodule EvoGit.Runtime.Genesis do
       mode when mode in [:custom, "custom"] ->
         raise ArgumentError,
               "custom mode is evolve-only; use an evolve task " <>
-                "(evogit evolve --mode custom --agent <id>)"
+                "(genesis evolve --mode custom --agent <id>)"
 
       _ ->
         if Helpers.new_codebase?(repo_path), do: :new, else: :existing
