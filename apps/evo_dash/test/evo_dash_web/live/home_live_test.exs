@@ -412,11 +412,24 @@ defmodule EvoDashWeb.HomeLiveTest do
   # :evogit_agent_state rows).
   defp real_context, do: ReqLLM.Context.new(real_history())
 
+  # The Assistant page requires a WORKSPACE: with none selected it renders the
+  # "Select a workspace to start" state instead of the greeting/composer, and
+  # every send is rejected. Tests that assert the chat surface select one first
+  # through the same `select_workspace` event a real user triggers.
+  @test_workspace "/tmp/genesis-assistant-workspace"
+
+  defp select_workspace(view, path \\ @test_workspace) do
+    html = render_change(view, "select_workspace", %{"workspace" => path})
+    assert assigns(view).workspace == path
+    html
+  end
+
   describe "render" do
     test "renders the idle chat page", %{conn: conn} do
-      {:ok, _view, html} = live(conn, "/help")
+      {:ok, view, _html} = live(conn, "/help")
+      html = select_workspace(view)
 
-      assert page_heading(html) == "Genesis Assistant"
+      assert page_heading(html) == "Assistant"
       assert html =~ "Start a conversation"
 
       # The message input and Send button are present and ENABLED on idle
@@ -435,7 +448,8 @@ defmodule EvoDashWeb.HomeLiveTest do
     end
 
     test "empty state renders the greeting and four operator suggestion chips", %{conn: conn} do
-      {:ok, _view, html} = live(conn, "/help")
+      {:ok, view, _html} = live(conn, "/help")
+      html = select_workspace(view)
 
       # ChatGPT-style empty state: greeting + 4 suggestion chips, each wired to
       # the send_message event with its message text as the phx-value (so
@@ -491,6 +505,7 @@ defmodule EvoDashWeb.HomeLiveTest do
     # asynchronous error log is captured rather than printed between tests.
     test "starts a reflect task with the right opts and tracks it synchronously", %{conn: conn} do
       {:ok, view, _html} = live(conn, "/help")
+      select_workspace(view)
 
       # The wrapper's `SelfReflective failed: ...` error log is emitted
       # ASYNCHRONOUSLY at task end, so the submit + the await of the row's
@@ -521,7 +536,8 @@ defmodule EvoDashWeb.HomeLiveTest do
       assert length(reflect) == 1
       task = hd(reflect)
       assert opt(task, :mode) == "reflect"
-      assert opt(task, :objective) == "hello genesis"
+      assert opt(task, :objective) ==
+               "## Workspace\npath: " <> @test_workspace <> "\n\nNew message: hello genesis"
       assert opt(task, :path) == nil
       refute has_opt?(task, :path)
       refute has_opt?(task, "path")
@@ -543,6 +559,7 @@ defmodule EvoDashWeb.HomeLiveTest do
 
     test "second message carries the transcript preamble", %{conn: conn} do
       {:ok, view, _html} = live(conn, "/help")
+      select_workspace(view)
 
       # Establish the transcript deterministically via :sys.replace_state (the
       # real reflect-task lifecycle is async and out of scope — see the
@@ -581,7 +598,8 @@ defmodule EvoDashWeb.HomeLiveTest do
         |> Enum.filter(&(&1.type == :reflect))
 
       assert opt(task, :objective) ==
-               "Previous conversation:\nUser: hello\nNew message: what is genesis?"
+               "## Workspace\npath: " <> @test_workspace <> "\n\n" <>
+                 "Previous conversation:\nUser: hello\nNew message: what is genesis?"
 
       cleanup_task_on_exit(task.id)
     end
@@ -591,6 +609,7 @@ defmodule EvoDashWeb.HomeLiveTest do
       fixture_id = insert_task_fixture!(opts: [path: "/tmp/test", objective: "fixture"])
 
       {:ok, view, _html} = live(conn, "/help")
+      select_workspace(view)
 
       html = render_submit(view, "send_message", %{"message" => "   "})
 
@@ -643,6 +662,7 @@ defmodule EvoDashWeb.HomeLiveTest do
   describe "new chat" do
     test "resets the chat to the idle empty state", %{conn: conn} do
       {:ok, view, _html} = live(conn, "/help")
+      select_workspace(view)
 
       # Synthetic running chat (seed + terminal event) — the real reflect
       # runtime must never run in this suite (see the setup's fail-fast
@@ -665,6 +685,7 @@ defmodule EvoDashWeb.HomeLiveTest do
 
     test "starts a fresh persisted chat and keeps the old one in the store", %{conn: conn} do
       {:ok, view, _html} = live(conn, "/help")
+      select_workspace(view)
       old_id = assigns(view).chat_id
       assert old_id != nil
 
@@ -698,6 +719,7 @@ defmodule EvoDashWeb.HomeLiveTest do
 
     test "new chat prunes the store to the newest 10 chats", %{conn: conn} do
       {:ok, view, _html} = live(conn, "/help")
+      select_workspace(view)
       first_id = assigns(view).chat_id
 
       # Seed 11 more chats directly (the click's prune(10) will drop the 3
@@ -978,7 +1000,7 @@ defmodule EvoDashWeb.HomeLiveTest do
       send(view.pid, {:agent_removed, 1, node()})
 
       html = render(view)
-      assert page_heading(html) == "Genesis Assistant"
+      assert page_heading(html) == "Assistant"
     end
 
     test "real AgentState ETS row flows through the real get_agent_history path", %{conn: conn} do
@@ -2202,10 +2224,10 @@ defmodule EvoDashWeb.HomeLiveTest do
       # The exact production event sequence, rendering after each step.
       send(view.pid, {:task_updated, "t_crash", :running, node()})
       html = render(view)
-      assert page_heading(html) == "Genesis Assistant"
+      assert page_heading(html) == "Assistant"
       send(view.pid, {:agent_updated, agent_id, [message_count: 2], node()})
       html = render(view)
-      assert page_heading(html) == "Genesis Assistant"
+      assert page_heading(html) == "Assistant"
 
       send(
         view.pid,
@@ -2221,7 +2243,7 @@ defmodule EvoDashWeb.HomeLiveTest do
       )
 
       html = render(view)
-      assert page_heading(html) == "Genesis Assistant"
+      assert page_heading(html) == "Assistant"
       # The real history fetch lands: 6 messages (5 real + the empty-content
       # assistant) — nil metadata, thinking parts, tool_calls and all.
       wait_until(fn -> assigns(view)[:agent_message_count] == 6 end)
@@ -2246,7 +2268,7 @@ defmodule EvoDashWeb.HomeLiveTest do
 
       send(view.pid, {:task_updated, "t_crash", :completed, node()})
       html = render(view)
-      assert page_heading(html) == "Genesis Assistant"
+      assert page_heading(html) == "Assistant"
       wait_until(fn -> assigns(view).chat_status == :idle end)
       html = render(view)
       assert html =~ "final reflect answer"
@@ -2363,7 +2385,7 @@ defmodule EvoDashWeb.HomeLiveTest do
       wait_until(fn -> assigns(view)[:tasks_reload_pending] == false end)
 
       html = render(view)
-      assert page_heading(html) == "Genesis Assistant"
+      assert page_heading(html) == "Assistant"
     end
 
     test "nil-status (review-mutation) broadcast is a no-op", %{conn: conn} do
@@ -2371,7 +2393,7 @@ defmodule EvoDashWeb.HomeLiveTest do
       seed_running_chat(view)
       send(view.pid, {:task_updated, "t1", nil, node()})
       html = render(view)
-      assert page_heading(html) == "Genesis Assistant"
+      assert page_heading(html) == "Assistant"
       assert assigns(view).chat_status == :running
       assert assigns(view).chat_task_id == "t1"
       assert assigns(view).chat_task_status == nil
@@ -2432,6 +2454,7 @@ defmodule EvoDashWeb.HomeLiveTest do
 
     test "stop with no task is a no-op", %{conn: conn} do
       {:ok, view, _html} = live(conn, "/help")
+      select_workspace(view)
       html = render_click(view, "stop", %{})
       assert assigns(view).chat_status == :idle
       assert assigns(view).chat_task_id == nil
@@ -3083,6 +3106,7 @@ defmodule EvoDashWeb.HomeLiveTest do
       fixture_id = insert_task_fixture!(opts: [path: "/tmp/test", objective: "fixture"])
 
       {:ok, view, _html} = live(conn, "/help")
+      select_workspace(view)
       html = await_source_available(view, false)
 
       # Gate container + Download button render (idle → enabled, "Download source").
@@ -3127,6 +3151,7 @@ defmodule EvoDashWeb.HomeLiveTest do
       Application.put_env(:evo_dash, :source_availability_runner, fn -> true end)
 
       {:ok, view, _html} = live(conn, "/help")
+      select_workspace(view)
       html = await_source_available(view, true)
 
       # No gate, chips intact, composer enabled — the gate's open state is the
@@ -3144,6 +3169,7 @@ defmodule EvoDashWeb.HomeLiveTest do
       Application.put_env(:evo_dash, :source_availability_runner, fn -> false end)
 
       {:ok, view, _html} = live(conn, "/help")
+      select_workspace(view)
       html = await_source_available(view, false)
       assert present?(html, "#genesis-source-gate")
 
@@ -3225,6 +3251,7 @@ defmodule EvoDashWeb.HomeLiveTest do
       conn: conn
     } do
       {:ok, view, _html} = live(conn, "/help?node=test-remote")
+      select_workspace(view)
       wait_until(fn -> not assigns(view).model_select_loading end)
       render_change(view, "chat_input", %{"message" => "hi remote"})
       html = render_submit(view, "send_message", %{"message" => "hi remote"})
@@ -3258,6 +3285,9 @@ defmodule EvoDashWeb.HomeLiveTest do
       # Patching back to "/help" (no ?node=) switches to local → a NEW chat.
       html = render_patch(view, "/help")
       assert assigns(view).current_node == node()
+      # Workspace selection is node-scoped, so the local node needs its own
+      # selection before the post-reset empty state can render.
+      html = select_workspace(view)
       assert html =~ "Start a conversation"
       assert assigns(view).chat_status == :idle
       assert assigns(view).chat_task_id == nil
@@ -3331,7 +3361,7 @@ defmodule EvoDashWeb.HomeLiveTest do
       end)
 
       {:ok, view, _html} = live(conn, "/help?node=test-remote")
-      html = render(view)
+      html = select_workspace(view)
 
       assert assigns(view).current_node == :"genesis_remote@127.0.0.1"
       # No check is spawned for a remote node → the runner is never called and
