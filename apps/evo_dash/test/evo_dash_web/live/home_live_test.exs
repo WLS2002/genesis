@@ -3356,6 +3356,22 @@ defmodule EvoDashWeb.HomeLiveTest do
       assert html =~ "Show my running tasks"
     end
   end
+
+  describe "assistant entry routes" do
+    test "GET / renders the assistant page", %{conn: conn} do
+      {:ok, _view, html} = live(conn, "/")
+
+      assert html =~ "Assistant"
+      assert html =~ "chat-form"
+      assert html =~ "assistant-workspace"
+    end
+
+    test "GET /help still renders the assistant page", %{conn: conn} do
+      {:ok, _view, html} = live(conn, "/help")
+
+      assert html =~ "chat-form"
+    end
+  end
 end
 
 # A minimal GenServer that stands in for a real connection manager in
@@ -3379,20 +3395,4 @@ defmodule EvoDashWeb.HomeLiveTest.ConnectionManager do
 
   @impl true
   def handle_call(:status, _from, status), do: {:reply, status, status}
-
-  describe "assistant entry routes" do
-    test "GET / renders the assistant page", %{conn: conn} do
-      {:ok, _view, html} = live(conn, "/")
-
-      assert html =~ "Assistant"
-      assert html =~ "chat-form"
-      assert html =~ "assistant-workspace"
-    end
-
-    test "GET /help still renders the assistant page", %{conn: conn} do
-      {:ok, _view, html} = live(conn, "/help")
-
-      assert html =~ "chat-form"
-    end
-  end
 end
