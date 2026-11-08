@@ -152,8 +152,10 @@ def stop_owned(args, url, token, record, *, require_idle=True):
         pid = int(record.get('runtime_process', {}).get('pid', 0))
         if pid <= 0:
             raise SetupError('unmanaged_service', 'Missing Windows host process identity.')
-        query = f'(Get-CimInstance Win32_Process -Filter "ProcessId = {pid}").ExecutablePath'
+        query = f'$ErrorActionPreference = "Stop"; (Get-CimInstance Win32_Process -Filter "ProcessId = {pid}").ExecutablePath'
         actual = subprocess.run(['powershell','-NoProfile','-NonInteractive','-Command',query], capture_output=True,text=True,check=True).stdout.strip()
+        if not actual and not endpoint_listening(url):
+            return
         if os.path.normcase(actual) != os.path.normcase(str(launcher)):
             raise SetupError('unmanaged_service', 'The saved Windows process no longer belongs to this installation.')
         print('Stopping the managed Genesis host.', file=sys.stderr, flush=True)
@@ -209,6 +211,7 @@ def upgrade_owned(args, url, token):
     except (SetupError, OSError, ValueError, URLError, subprocess.SubprocessError) as error:
         # A newly launched candidate may own the port but have a broken MCP
         # endpoint. Ownership, rather than protocol health, identifies that host.
+        require_idle = False
         if endpoint_listening(url):
             try:
                 verify(url, token)
@@ -216,7 +219,9 @@ def upgrade_owned(args, url, token):
                 require_idle = False
             else:
                 require_idle = True
-            stop_owned(args, url, token, json.loads(record_path.read_text()), require_idle=require_idle)
+        # Stop the managed supervisor even if a candidate never exposed HTTP:
+        # it may be scheduled to restart, while its current process is gone.
+        stop_owned(args, url, token, json.loads(record_path.read_text()), require_idle=require_idle)
         if args.release_dir.exists():
             shutil.rmtree(args.release_dir)
         shutil.copytree(backup, args.release_dir)

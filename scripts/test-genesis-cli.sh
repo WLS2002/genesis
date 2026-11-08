@@ -231,6 +231,10 @@ if [ "\${1:-}" = "--user" ]; then
   case "\${2:-}" in
     show-environment) exit 0 ;;
     is-active) exit 1 ;;
+    show)
+      if [ -e "$SYSD/restarting" ]; then printf 'activating\n'; else printf 'inactive\n'; fi
+      exit 0 ;;
+    stop) rm -f "$SYSD/restarting"; exit 0 ;;
   esac
 fi
 exit 0
@@ -427,6 +431,12 @@ if [ -e "$TMP/shim/loginctl.calls" ]; then
   fail "loginctl must never be invoked without the systemd backend: $(cat "$TMP/shim/loginctl.calls")"
 fi
 ok "no fallback/foreground path ever invoked loginctl"
+
+: >"$SYSD/restarting"
+expect_status 0 "stop cancels a failed service's pending automatic restart" "$GENESIS" stop
+[ ! -e "$SYSD/restarting" ] || fail "stop must cancel an activating/restarting unit"
+contains "$(cat "$TMP/out")" "server stopped" "a restarting service must be stopped"
+ok "stop cancels automatic restart even when is-active returns false"
 
 # ── remote development (`genesis remote …`) ─────────────────────────────────
 # Distribution is a RUNTIME TOGGLE on the ONE server instance: the CLI writes

@@ -772,8 +772,16 @@ do_stop() {
   case $(service_backend) in
     systemd)
       if ! systemctl --user is-active --quiet "$SYSTEMD_UNIT" >/dev/null 2>&1; then
-        systemctl --user reset-failed "$SYSTEMD_UNIT" >/dev/null 2>&1 || true
-        return 1
+        # A failed start may be waiting for Restart=on-failure. It is not
+        # active yet still needs stop before rollback or replacement.
+        _stop_state=$(systemctl --user show "$SYSTEMD_UNIT" -p ActiveState --value 2>/dev/null || true)
+        case $_stop_state in
+          activating|deactivating|reloading|failed) ;;
+          *)
+            systemctl --user reset-failed "$SYSTEMD_UNIT" >/dev/null 2>&1 || true
+            return 1
+            ;;
+        esac
       fi
       if ! systemctl --user stop "$SYSTEMD_UNIT"; then
         die "systemctl --user stop $SYSTEMD_UNIT failed"

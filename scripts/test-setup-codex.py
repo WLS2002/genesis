@@ -24,11 +24,15 @@ if len(sys.argv)>1:
     if sys.argv[1]=='url':
         print(os.environ.get('STORED_DASHBOARD_URL',''));sys.exit(0)
     if sys.argv[1]=='stop':
-        os.kill(int((root/'pid').read_text()),15);sys.exit(0)
+        (root/'restarting').unlink(missing_ok=True)
+        try:os.kill(int((root/'pid').read_text()),15)
+        except ProcessLookupError:pass
+        sys.exit(0)
     if sys.argv[1]=='start':
         with (root/'starts').open('a') as f:f.write('start\n')
         failure=root/'fail-once'
-        if failure.exists():failure.unlink();sys.exit(1)
+        if failure.exists():failure.unlink();(root/'restarting').touch();sys.exit(1)
+        if (root/'restarting').exists():sys.exit(1)
         port=sys.argv[sys.argv.index('--port')+1]
         child_env={**os.environ,'FIXTURE_PORT':port}
         broken=root/'broken-once'
