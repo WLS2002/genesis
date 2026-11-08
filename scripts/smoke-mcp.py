@@ -35,8 +35,10 @@ with tempfile.TemporaryDirectory(prefix="Genesis smoke 测试 ") as temporary:
         env["APPDATA"], env["LOCALAPPDATA"] = str(trial / "Roaming"), str(trial / "Local")
         config = Path(env["APPDATA"]) / "genesis"
     elif sys.platform == "darwin":
-        config = connector.default_config_dir()
+        env["HOME"] = str(trial / "home")
+        config = Path(env["HOME"]) / "Library/Application Support/genesis"
     else:
+        env["HOME"] = str(trial / "home")
         env["XDG_CONFIG_HOME"] = str(trial / "config")
         config = Path(env["XDG_CONFIG_HOME"]) / "genesis"
     with socket.socket() as probe:

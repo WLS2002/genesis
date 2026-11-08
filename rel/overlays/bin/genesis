@@ -632,7 +632,7 @@ start_systemd() {
   if [ -n "${XDG_DATA_HOME:-}" ]; then
     set -- "$@" "--setenv=XDG_DATA_HOME=$XDG_DATA_HOME"
   fi
-  set -- "$@" "--setenv=PATH=$PATH"
+  set -- "$@" "--setenv=PATH=$PATH" "--setenv=HOME=$HOME"
   if [ -n "${CODEX_HOME:-}" ]; then
     set -- "$@" "--setenv=CODEX_HOME=$CODEX_HOME"
   fi
@@ -691,6 +691,7 @@ write_launchd_plist() {
     <key>PHX_IP</key><string>$(xml_escape "$_ip")</string>
     <key>PORT</key><string>$_port</string>
     <key>PATH</key><string>$(xml_escape "$PATH")</string>
+    <key>HOME</key><string>$(xml_escape "$HOME")</string>
 $_host_env
 $_data_env
 $_codex_env

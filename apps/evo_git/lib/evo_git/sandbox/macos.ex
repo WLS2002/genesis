@@ -598,8 +598,8 @@ defmodule EvoGit.Sandbox.MacOS do
         end)
 
       case Task.yield(task, timeout) || Task.shutdown(task) do
-        {:ok, {_output, exit_code}} ->
-          content = Helpers.read_tempfile(tmpfile, max_bytes)
+        {:ok, {output, exit_code}} ->
+          content = Helpers.command_output(tmpfile, output, max_bytes)
           {:ok, content, exit_code}
 
         nil ->

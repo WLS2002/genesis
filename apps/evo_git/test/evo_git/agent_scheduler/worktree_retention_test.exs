@@ -53,12 +53,30 @@ defmodule EvoGit.AgentScheduler.WorktreeRetentionTest do
   } do
     File.write!(Path.join(wt, "legacy.txt"), "unfinished work")
     assert {:ok, status} = EvoGit.TaskControl.check(%{"path" => root})
-    assert [%{"path" => ^wt} = entry] = status.recoverable_work
+    assert [entry] = status.recoverable_work
+    assert same_path?(entry["path"], wt)
     assert entry["retained"]
     assert is_nil(entry["task_id"])
     assert File.read!(Path.join(wt, "legacy.txt")) == "unfinished work"
     assert WorktreeRetention.list(root, "unrelated-task") == []
     assert {:ok, second} = EvoGit.TaskControl.check(%{"path" => root})
     assert second.recoverable_work == status.recoverable_work
+  end
+
+  test "discovery preserves known task ownership when Git canonicalizes path spelling", %{
+    root: root,
+    wt: wt,
+    branch: branch
+  } do
+    File.write!(Path.join(wt, "in-progress.txt"), "keep")
+    :ok = WorktreeRetention.record(root, wt, branch, %{task_id: "known-task", retained: true})
+    assert {:ok, status} = EvoGit.TaskControl.check(%{"path" => root})
+    assert [entry] = status.recoverable_work
+    assert same_path?(entry["path"], wt)
+    assert entry["task_id"] == "known-task"
+  end
+
+  defp same_path?(a, b) do
+    if EvoGit.Platform.windows?(), do: String.downcase(a) == String.downcase(b), else: a == b
   end
 end

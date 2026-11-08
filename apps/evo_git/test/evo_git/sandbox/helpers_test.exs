@@ -3,6 +3,24 @@ defmodule EvoGit.Sandbox.HelpersTest do
 
   alias EvoGit.Sandbox.Helpers
 
+  @tag :tmp_dir
+  test "keeps launcher diagnostics when a command fails before creating its output file", %{
+    tmp_dir: root
+  } do
+    assert {:ok, output, 23} =
+             Helpers.run_task_with_partial(
+               "bash",
+               ["-c", "echo launcher-failed >&2; exit 23"],
+               root,
+               [],
+               5000,
+               Path.join(root, "missing-output"),
+               4096
+             )
+
+    assert output =~ "launcher-failed"
+  end
+
   describe "shell_escape/1" do
     test "wraps a simple argument in single quotes" do
       assert Helpers.shell_escape("hello") == "'hello'"

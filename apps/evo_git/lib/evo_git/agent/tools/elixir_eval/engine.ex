@@ -97,8 +97,11 @@ defmodule EvoGit.Agent.Tools.ElixirEval.Engine do
   end
 
   defp dune(code, tier, limits) do
+    allowlist = if tier == :read, do: ReadAllowlist, else: WriteAllowlist
+    :ok = allowlist.ensure_base_loaded()
+
     opts = [
-      allowlist: if(tier == :read, do: ReadAllowlist, else: WriteAllowlist),
+      allowlist: allowlist,
       max_length: @max_code_bytes,
       atom_pool_size: 1_000,
       max_heap_size: @dune_heap_words,

@@ -53,7 +53,7 @@ Engine accepts validated limits and an authorized context, adds only the request
 Every evaluation has fresh bindings; there is no persistent REPL state.
 The engine rejects invalid UTF-8 or code over 16,384 bytes independently of any stricter public-tool validation.
 Read/write use Dune's safe string parser for preflight and interpretation, with a 1,000-atom pool, 1,000,000-word heap budget, 5,000,000 reductions and supplied execution/parse timeouts.
-Both public allowlist wrappers load their generated Base allowlist in an `@on_load` callback, so Dune's generated alias-atom initialization runs before safe parsing, including when read or write is the first tier used in a fresh BEAM.
+Engine explicitly loads the selected wrapper's generated Base allowlist before Dune safe parsing, including when read or write is the first tier used in a fresh BEAM. Cross-module loading is kept out of wrapper `@on_load` callbacks so embedded release boot does not depend on module load order.
 Deferring Base loading until `fun_status/3` is too late: Dune 0.3.18 encodes unknown alias segments before function authorization, preventing fully qualified facades from resolving on cold first use.
 Unqualified dbg AST nodes are rejected before interpretation because sanitizer-generated debug IO can bypass normal allowlist shims; Kernel.dbg is also restricted by the allowlist.
 Default Dune pure operations remain available, but every EvoGit module is intercepted before Base fallback and denied unless its exact MFA and tier appear in `DirectAPI`'s literal registry or compatible facade list.

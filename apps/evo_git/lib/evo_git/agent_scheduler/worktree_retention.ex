@@ -178,6 +178,8 @@ defmodule EvoGit.AgentScheduler.WorktreeRetention do
   end
 
   defp descriptor(repo, path) do
+    path = Path.expand(path)
+    path = if EvoGit.Platform.windows?(), do: String.downcase(path), else: path
     key = :crypto.hash(:sha256, path) |> Base.encode16(case: :lower)
     Path.join([repo, ".genesis/recovery", key <> ".json"])
   end

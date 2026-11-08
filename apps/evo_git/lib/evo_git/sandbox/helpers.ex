@@ -129,6 +129,14 @@ defmodule EvoGit.Sandbox.Helpers do
     content
   end
 
+  @doc "Uses launcher diagnostics when redirection produced no command output."
+  def command_output(path, diagnostics, max_bytes) do
+    case read_tempfile(path, max_bytes) do
+      "" -> truncate_output(diagnostics, max_bytes)
+      content -> content
+    end
+  end
+
   # Reads only the first and last portions of a large file directly from disk
   # without loading the entire file into memory. Uses :file.pread/3 for
   # positioned reads and :raw/:binary mode for speed. The truncation notice is
@@ -457,8 +465,8 @@ defmodule EvoGit.Sandbox.Helpers do
       end)
 
     case Task.yield(task, timeout) || Task.shutdown(task) do
-      {:ok, {_output, exit_code}} ->
-        content = read_tempfile(tmpfile, max_bytes)
+      {:ok, {output, exit_code}} ->
+        content = command_output(tmpfile, output, max_bytes)
         {:ok, content, exit_code}
 
       nil ->

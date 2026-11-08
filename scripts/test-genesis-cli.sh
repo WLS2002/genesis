@@ -866,6 +866,7 @@ contains "$runlog" "--setenv=XDG_CONFIG_HOME=$TMP/config with spaces" "systemd m
 contains "$runlog" "--setenv=XDG_DATA_HOME=$TMP/data with spaces" "systemd must preserve the selected runtime data directory"
 contains "$runlog" "--setenv=GENESIS_DATA_DIR=$RDATA" "the instance must share this CLI's data dir"
 contains "$runlog" "--setenv=PHX_IP=127.0.0.1" "the instance must receive the bind address"
+contains "$runlog" "--setenv=HOME=$HOME" "the instance must retain the invoking configuration home"
 contains "$runlog" "--property=Restart=on-failure" "a crashed instance must be restarted"
 contains "$runlog" "$RELEASE/bin/genesis_server start" "the release launcher must be started"
 grep -qx -- '--user reset-failed genesis-server' "$RLOG/systemctl.log" ||
@@ -1099,6 +1100,7 @@ contains "$plist" "<key>GENESIS_DATA_DIR</key><string>$RDATA</string>" \
   "the instance must share this CLI's data dir"
 contains "$plist" "<key>RunAtLoad</key><true/>" "the plist must RunAtLoad"
 contains "$plist" "<key>PATH</key>" "launchd must retain the invoking development tool PATH"
+contains "$plist" "<key>HOME</key><string>$TMP/home</string>" "launchd must retain the isolated configuration home"
 contains "$plist" "Codex &amp; Profile" "launchd must retain and XML-escape the chosen vendor login directory"
 grep -q '^bootstrap gui/1000 ' "$RLOG/launchctl.log" ||
   fail "the plist must be bootstrapped into gui/<uid>: $(cat "$RLOG/launchctl.log")"
