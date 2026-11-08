@@ -8,9 +8,11 @@ This guide is for the agent carrying out that request. Complete the local instal
 
 ## MCP preview installation
 
+The published 0.6.0 packages predate the agent-startup fix on this branch. To test that fix, rebuild the backend from this checkout; updating the Skill or MCP registration alone does not update the engine.
+
 The MCP preview lives on [`WLS2002/genesis`, branch `feat/mcp-codex`](https://github.com/WLS2002/genesis/tree/feat/mcp-codex). Clone that branch when given its GitHub link; a plain clone of the repository's default branch does not select the preview.
 
-Use the matching [MCP preview release](https://github.com/WLS2002/genesis/releases/tag/mcp-preview-0.6.1). It includes the runtime, so an Erlang/Elixir source toolchain is unnecessary.
+Use the matching [MCP preview release](https://github.com/WLS2002/genesis/releases/tag/mcp-preview-0.6.0). It includes the runtime, so an Erlang/Elixir source toolchain is unnecessary.
 
 | Environment | Package / preparation |
 | --- | --- |
@@ -24,7 +26,7 @@ Prepare Python 3.9+, Git and the current coding agent. Linux/macOS also need `cu
 **Linux, macOS, or a coding agent running inside WSL:**
 
 ```sh
-export GENESIS_VERSION=mcp-preview-0.6.1
+export GENESIS_VERSION=mcp-preview-0.6.0
 export GENESIS_DOWNLOAD_BASE=https://github.com/WLS2002/genesis/releases/download
 export GENESIS_DOWNLOAD_FALLBACK_BASE=https://github.com/WLS2002/genesis/releases
 python3 scripts/setup-codex.py --method release --json
@@ -33,7 +35,7 @@ python3 scripts/setup-codex.py --method release --json
 **Native Windows, PowerShell:**
 
 ```powershell
-$env:GENESIS_VERSION = "mcp-preview-0.6.1"
+$env:GENESIS_VERSION = "mcp-preview-0.6.0"
 $env:GENESIS_DOWNLOAD_BASE = "https://github.com/WLS2002/genesis/releases/download"
 $env:GENESIS_DOWNLOAD_FALLBACK_BASE = "https://github.com/WLS2002/genesis/releases"
 python scripts/setup-codex.py --method release --json

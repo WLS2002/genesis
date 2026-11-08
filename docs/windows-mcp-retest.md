@@ -1,6 +1,6 @@
 # Retest Genesis from DeepSeek Harness on Windows
 
-Use the [MCP preview](https://github.com/WLS2002/genesis/tree/mcp-preview-0.6.1) and follow [INSTALL.md](../INSTALL.md). The service and portable Skill work with an HTTP MCP host that supports authorization headers. Codex is optional.
+Use the [MCP preview](https://github.com/WLS2002/genesis/tree/mcp-preview-0.6.0) and follow [INSTALL.md](../INSTALL.md). The service and portable Skill work with an HTTP MCP host that supports authorization headers. Codex is optional.
 
 ## Preserve the previous experiment
 
@@ -13,7 +13,7 @@ The service version, target project commit, Skill version and Harness version ar
 In PowerShell, from the selected checkout:
 
 ```powershell
-$env:GENESIS_VERSION = "mcp-preview-0.6.1"
+$env:GENESIS_VERSION = "mcp-preview-0.6.0"
 $env:GENESIS_DOWNLOAD_BASE = "https://github.com/WLS2002/genesis/releases/download"
 $env:GENESIS_DOWNLOAD_FALLBACK_BASE = "https://github.com/WLS2002/genesis/releases"
 python scripts/setup-genesis.py --method release --json

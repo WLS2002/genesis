@@ -53,7 +53,7 @@ class Handler(BaseHTTPRequestHandler):
         if method=='initialize':data={'serverInfo':{'name':'genesis'},'protocolVersion':'2025-11-25'}
         elif method=='tools/list':data={'tools':[{'name':x} for x in ['genesis_check','genesis_start_task','genesis_get_task','genesis_list_tasks','genesis_cancel_task','genesis_list_models','genesis_get_result','genesis_send_message','genesis_reload_config']]}
         elif r.get('params',{}).get('name')=='genesis_list_tasks':data={'structuredContent':{'tasks':[{'id':'active'}] if os.environ.get('FIXTURE_ACTIVE_TASK') else [],'total':1 if os.environ.get('FIXTURE_ACTIVE_TASK') else 0}}
-        else:data={'structuredContent':{'version':'test','build':{'release':os.environ.get('FIXTURE_BUILD_RELEASE','mcp-preview-0.6.1'),'revision':'a'*40,'platform':'fixture'},'model_ready':bool(os.environ.get('MODEL_READY')),'warnings':[], 'config_files':{'config':str(Path(os.environ['XDG_CONFIG_HOME'])/'genesis/config.toml'),'credentials':str(Path(os.environ['XDG_CONFIG_HOME'])/'genesis/credentials.toml')}}}
+        else:data={'structuredContent':{'version':'test','build':{'release':os.environ.get('FIXTURE_BUILD_RELEASE','mcp-preview-0.6.0'),'revision':'a'*40,'platform':'fixture'},'model_ready':bool(os.environ.get('MODEL_READY')),'warnings':[], 'config_files':{'config':str(Path(os.environ['XDG_CONFIG_HOME'])/'genesis/config.toml'),'credentials':str(Path(os.environ['XDG_CONFIG_HOME'])/'genesis/credentials.toml')}}}
         body=json.dumps({'jsonrpc':'2.0','id':r['id'],'result':data}).encode()
         self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
 HTTPServer(('127.0.0.1',int(os.environ['FIXTURE_PORT'])),Handler).serve_forever()
@@ -123,7 +123,7 @@ class SetupTests(unittest.TestCase):
         failed = self.run_setup(extra=['--upgrade'])
         self.assertEqual(failed.returncode, 1, failed.stderr)
         self.assertEqual(json.loads(failed.stdout)['code'], 'upgrade_failed')
-        self.env['GENESIS_VERSION'] = 'mcp-preview-0.6.1'
+        self.env['GENESIS_VERSION'] = 'mcp-preview-0.6.0'
         restored = self.run_setup()
         self.assertEqual(restored.returncode, 2, restored.stderr)
         self.assertFalse(json.loads(restored.stdout)['service_started'])
@@ -140,7 +140,7 @@ class SetupTests(unittest.TestCase):
         with patch.dict(os.environ,self.env), patch.object(setup.shutil,'copytree',side_effect=OSError('disk full')):
             with self.assertRaises((OSError, setup.SetupError)):
                 setup.upgrade_owned(args,url,token)
-        self.assertEqual(setup.verify(url,token)['build']['release'], 'mcp-preview-0.6.1')
+        self.assertEqual(setup.verify(url,token)['build']['release'], 'mcp-preview-0.6.0')
         self.assertEqual((self.root/'starts').read_text().splitlines(), ['start'])
 
     def test_failed_upgrade_restarts_the_previous_runtime_and_preserves_configuration(self):
@@ -153,7 +153,7 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(json.loads(failed.stdout)['code'], 'upgrade_failed')
         self.assertIn('restored the previous installation', json.loads(failed.stdout)['message'])
         self.assertEqual((self.config/'config.toml').read_text(), '# preserve existing user model settings\n')
-        self.env['GENESIS_VERSION'] = 'mcp-preview-0.6.1'
+        self.env['GENESIS_VERSION'] = 'mcp-preview-0.6.0'
         restored = self.run_setup()
         self.assertEqual(restored.returncode, 2, restored.stderr)
         self.assertFalse(json.loads(restored.stdout)['service_started'])
@@ -170,7 +170,7 @@ class SetupTests(unittest.TestCase):
         self.assertNotIn((self.config/'mcp-token').read_text().strip(), result.stdout)
 
     def test_pinned_release_rejects_an_unidentified_running_service(self):
-        self.env['GENESIS_VERSION'] = 'mcp-preview-0.6.1'
+        self.env['GENESIS_VERSION'] = 'mcp-preview-0.6.0'
         self.env['FIXTURE_BUILD_RELEASE'] = 'unknown'
         result = self.run_setup()
         self.assertEqual(result.returncode, 1, result.stderr)
