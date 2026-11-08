@@ -10,6 +10,7 @@ import subprocess
 import tarfile
 import tempfile
 import zipfile
+from genesis_build import stamp
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--platform", required=True)
@@ -17,6 +18,7 @@ parser.add_argument("--release-dir", type=Path, required=True)
 parser.add_argument("--output", type=Path, default=Path("dist"))
 args = parser.parse_args()
 args.output.mkdir(parents=True, exist_ok=True)
+metadata = stamp(args.release_dir, args.platform)
 if args.platform == "windows_x64":
     asset = args.output / "genesis_desktop_windows_x64.zip"
     with tempfile.TemporaryDirectory() as temporary:
@@ -36,7 +38,7 @@ else:
 digest = hashlib.sha256(asset.read_bytes()).hexdigest()
 asset.with_name(asset.name + ".sha256").write_text(digest + "  " + asset.name + "\n")
 (args.output / f"build-info-{args.platform}.json").write_text(json.dumps({
-    "revision": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+    **metadata,
     "platform": args.platform, "build_os": platform.platform(),
     "libc": platform.libc_ver(), "sha256": digest, "asset": asset.name
 }, indent=2) + "\n")

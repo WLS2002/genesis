@@ -10,7 +10,7 @@ This guide is for the agent carrying out that request. Complete the local instal
 
 The MCP preview lives on [`WLS2002/genesis`, branch `feat/mcp-codex`](https://github.com/WLS2002/genesis/tree/feat/mcp-codex). Clone that branch when given its GitHub link; a plain clone of the repository's default branch does not select the preview.
 
-Use the matching [MCP preview release](https://github.com/WLS2002/genesis/releases/tag/mcp-preview-0.5.0). It includes the runtime, so an Erlang/Elixir source toolchain is unnecessary.
+Use the matching [MCP preview release](https://github.com/WLS2002/genesis/releases/tag/mcp-preview-0.6.0). It includes the runtime, so an Erlang/Elixir source toolchain is unnecessary.
 
 | Environment | Package / preparation |
 | --- | --- |
@@ -24,7 +24,7 @@ Prepare Python 3.9+, Git and the current coding agent. Linux/macOS also need `cu
 **Linux, macOS, or a coding agent running inside WSL:**
 
 ```sh
-export GENESIS_VERSION=mcp-preview-0.5.0
+export GENESIS_VERSION=mcp-preview-0.6.0
 export GENESIS_DOWNLOAD_BASE=https://github.com/WLS2002/genesis/releases/download
 export GENESIS_DOWNLOAD_FALLBACK_BASE=https://github.com/WLS2002/genesis/releases
 python3 scripts/setup-codex.py --method release --json
@@ -33,7 +33,7 @@ python3 scripts/setup-codex.py --method release --json
 **Native Windows, PowerShell:**
 
 ```powershell
-$env:GENESIS_VERSION = "mcp-preview-0.5.0"
+$env:GENESIS_VERSION = "mcp-preview-0.6.0"
 $env:GENESIS_DOWNLOAD_BASE = "https://github.com/WLS2002/genesis/releases/download"
 $env:GENESIS_DOWNLOAD_FALLBACK_BASE = "https://github.com/WLS2002/genesis/releases"
 python scripts/setup-codex.py --method release --json
@@ -41,7 +41,7 @@ python scripts/setup-codex.py --method release --json
 
 The shared setup entry chooses the current platform. Native Windows installs under `%LOCALAPPDATA%\Genesis\server`, reuses Genesis's existing headless desktop host and reports its PID/log path as `runtime_process`. Model/token files live in the backend's `%APPDATA%\genesis`. This starts a background process for the current login, without registering an administrator service. Linux/macOS retain the original `genesis` lifecycle CLI.
 
-For another compatible coding agent, use the same download settings with `sh scripts/install.sh` on Linux/macOS, or `python scripts/install-windows.py` on native Windows. Start the POSIX lifecycle launcher or the installed `genesis-desktop.exe --headless` host (set `PORT=9999` and `EVOGIT_BIND=127.0.0.1`), then follow the [shared connection contract](docs/agent-mcp.md#connection-contract). The automatic setup command above is the Codex adapter.
+For another compatible coding agent, run `python scripts/setup-genesis.py --method release --json` with the same download settings. It prepares the same service without installing or invoking Codex. Register the private MCP connection and load the returned Skill using the [shared connection contract](docs/agent-mcp.md#connection-contract).
 
 Keep the calling agent, Genesis, repository and credentials in the same environment. For a native Windows agent use the native Windows package; for WSL run both agent and service inside WSL with Linux project paths. WSL does not translate a native host's MCP registration or vendor login automatically. If WSL is absent, use native Windows or ask the user to complete OS provisioning that requires elevation/restart.
 
@@ -56,6 +56,16 @@ Inspect OS, architecture, package manager and available tools. Source builds req
 ## 2. Prepare and start Genesis
 
 Identify any running Genesis instance and use its actual address/configuration. Lifecycle-managed installs expose `genesis url` and `genesis status`; a source development server commonly uses port4100, and a desktop instance displays its own URL. Resolve the existing instance before starting another against the same data. Preserve model/credential files and local work.
+
+For any supported host, including DeepSeek Harness, prepare the service with:
+
+```sh
+python scripts/setup-genesis.py --method release --json
+```
+
+The result contains `build`, `mcp_url`, a private `mcp_config_file` and `skill_path`. Register that connection with the host and load the Skill. The private JSON uses common HTTP MCP `headers`; adapt field names to the host's documented syntax without printing the token. Codex is optional.
+
+Compare `build.release` with the selected preview; use `--expected-revision <source-sha>` when testing an exact checkout. A reachable endpoint alone does not prove the intended runtime is installed. `--upgrade` replaces only an idle installation with a matching `runtime.json` ownership record, preserves user configuration and keeps a rollback copy. For an older installation without that record, inspect its tasks and stop its headless host before rerunning with `--method release`.
 
 Choose a host adapter where available:
 
@@ -73,10 +83,7 @@ genesis status
 If `genesis` is not on PATH, use the installed `bin/genesis` path printed by the installer. To build the current feature checkout:
 
 ```sh
-mix deps.get
-MIX_ENV=prod mix assets.deploy
-MIX_ENV=prod mix release genesis_server
-_build/prod/rel/genesis_server/bin/genesis start
+python3 scripts/setup-genesis.py --method source --json
 ```
 
 The default headless dashboard is `http://127.0.0.1:9999`. Use the actual configured address if different. A running release without the required MCP tools needs an explicit upgrade/restart decision; do not silently replace it.
@@ -96,3 +103,5 @@ Verify three things separately: the service responds, a fresh host session disco
 If model choice or login remains, report installed components, the exact configuration file path or vendor login command and the precise remaining user action. When configuration is ready, report the connection URL and explain how to ask the current agent to use Genesis. Report task progress in the calling agent; offer task links as optional views. Localhost links open on the Genesis machine.
 
 For subsequent development use the [shared workflow](docs/agent-mcp.md#tasks-and-results) and [caller/Genesis overview](plugins/genesis/skills/genesis/references/overview.md). Codex-specific setup return codes, options and plugin maintenance live in the [Codex adapter](docs/codex-mcp.md).
+
+For a controlled Windows/DeepSeek Harness retest, follow [the retest checklist](docs/windows-mcp-retest.md).

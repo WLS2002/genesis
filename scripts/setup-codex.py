@@ -3,10 +3,13 @@
 import argparse
 import importlib.util
 import json
+import platform
 import os
 from pathlib import Path
 import re
 import shutil
+import signal
+import tempfile
 import subprocess
 import sys
 import time
@@ -49,6 +52,9 @@ def source_launcher():
     build_env = {**os.environ, "MIX_ENV": "prod"}
     for command in [["mix", "deps.get"], ["mix", "assets.deploy"], ["mix", "release", "genesis_server", "--overwrite"]]:
         run(command, build_env)
+    from genesis_build import stamp
+    target = ('darwin' if sys.platform == 'darwin' else 'linux') + ('_arm64' if platform.machine().lower() in ('arm64','aarch64') else '_x64')
+    stamp(ROOT / '_build/prod/rel/genesis_server', target)
     return ROOT / "_build/prod/rel/genesis_server/bin/genesis"
 
 
@@ -118,12 +124,102 @@ def selected_url(args):
     return "http://127.0.0.1:9999/mcp"
 
 
+def runtime_environment(args):
+    env = dict(os.environ)
+    if sys.platform.startswith('linux'):
+        env['XDG_CONFIG_HOME'] = str(args.config_dir.parent)
+    env.setdefault('GENESIS_LINGER', 'no')
+    return env
+
+
+def stop_owned(args, url, token, record):
+    if record.get('url') != url or Path(record.get('release_dir', '')).resolve() != args.release_dir:
+        raise SetupError('unmanaged_service', 'This endpoint has no matching managed installation record. Inspect and stop the previous host before reinstalling.')
+    launcher = Path(record['launcher']).resolve()
+    if not launcher.is_relative_to(args.release_dir):
+        raise SetupError('unmanaged_service', 'The launcher is outside this managed installation.')
+    for state in ('pending','running','finalizing','cancelling'):
+        reply = connector.rpc(url, token, 'tools/call', {'name':'genesis_list_tasks', 'arguments':{'status':state,'limit':1}})['result']
+        tasks = reply.get('structuredContent', {})
+        if 'tasks' not in tasks or 'total' not in tasks:
+            raise SetupError('task_status_unavailable', 'Cannot confirm that the existing service is idle.')
+        if tasks['total'] or tasks['tasks']:
+            raise SetupError('active_tasks', 'Genesis has active tasks. Finish or stop them through MCP before upgrading.')
+    if IS_WINDOWS:
+        pid = int(record.get('runtime_process', {}).get('pid', 0))
+        if pid <= 0:
+            raise SetupError('unmanaged_service', 'Missing Windows host process identity.')
+        query = f'(Get-CimInstance Win32_Process -Filter "ProcessId = {pid}").ExecutablePath'
+        actual = subprocess.run(['powershell','-NoProfile','-NonInteractive','-Command',query], capture_output=True,text=True,check=True).stdout.strip()
+        if os.path.normcase(actual) != os.path.normcase(str(launcher)):
+            raise SetupError('unmanaged_service', 'The saved Windows process no longer belongs to this installation.')
+        os.kill(pid, signal.SIGTERM)
+    else:
+        run([launcher, 'stop'], runtime_environment(args))
+    deadline = time.monotonic()+20
+    while time.monotonic() < deadline:
+        try:
+            verify(url, token)
+        except URLError as error:
+            if refused(error):
+                return
+            raise
+        time.sleep(.1)
+    raise SetupError('stop_failed', 'The previous Genesis endpoint is still running; no files were replaced.')
+
+
+def upgrade_owned(args, url, token):
+    record_path = args.config_dir/'runtime.json'
+    if not record_path.is_file():
+        raise SetupError('unmanaged_service', 'No runtime.json ownership record exists. Inspect and stop the previous host before reinstalling.')
+    record = json.loads(record_path.read_text())
+    stop_owned(args, url, token, record)
+    backup = Path(tempfile.mkdtemp(prefix='.genesis-rollback-',dir=args.release_dir.parent))/'runtime'
+    shutil.copytree(args.release_dir, backup)
+    from types import SimpleNamespace
+    next_args = SimpleNamespace(**vars(args))
+    next_args.method = 'release'
+    next_args.upgrade = False
+    try:
+        result = setup(next_args)
+        result['previous_installation'] = str(backup)
+        return result
+    except (SetupError, OSError, ValueError, URLError, subprocess.SubprocessError) as error:
+        # Stop only the new managed instance; don't replace an active runtime.
+        try:
+            verify(url, token)
+        except URLError as probe:
+            if not refused(probe):
+                raise
+        else:
+            stop_owned(args, url, token, json.loads(record_path.read_text()))
+        if args.release_dir.exists():
+            shutil.rmtree(args.release_dir)
+        shutil.copytree(backup, args.release_dir)
+        env = runtime_environment(args)
+        launcher = Path(record['launcher'])
+        if IS_WINDOWS:
+            record['runtime_process'] = windows.start(launcher, url, args.config_dir, env)
+        else:
+            address=urlsplit(url)
+            run([launcher,'start','--ip',address.hostname,'--port',str(address.port or 80),'--no-linger'],env)
+        connector.write_private_json(record_path, record)
+        raise SetupError('upgrade_failed', f'Upgrade failed; restored the previous installation. {error}') from error
+
+
 def setup(args):
+    version = json.loads((ROOT/'plugins/genesis/.codex-plugin/plugin.json').read_text())['version']
+    os.environ.setdefault('GENESIS_VERSION', 'mcp-preview-'+version)
+    os.environ.setdefault('GENESIS_DOWNLOAD_BASE', 'https://github.com/WLS2002/genesis/releases/download')
+    os.environ.setdefault('GENESIS_DOWNLOAD_FALLBACK_BASE', 'https://github.com/WLS2002/genesis/releases')
     url = selected_url(args)
-    if not shutil.which("codex"):
+    agent = getattr(args, "agent", "codex")
+    if agent == "codex" and not shutil.which("codex"):
         raise SetupError("codex_required", "Install Codex CLI with plugin support before connecting Genesis.")
     args.config_dir = args.config_dir.expanduser().resolve()
     args.release_dir = args.release_dir.expanduser().resolve()
+    if args.config_dir.is_relative_to(args.release_dir):
+        raise SetupError('config_directory', 'Keep the Genesis configuration directory outside the replaceable runtime directory.')
     token = connector.ensure_token(args.config_dir)
     started = False
     runtime_process = None
@@ -148,6 +244,9 @@ def setup(args):
         else:
             run([command, "start", "--ip", "127.0.0.1" if address.hostname == "localhost" else address.hostname, "--port", str(address.port or 80), "--no-linger"], service_env)
         started = True
+        connector.write_private_json(args.config_dir/'runtime.json', {
+            'url':url, 'launcher':str(command), 'release_dir':str(args.release_dir),
+            'runtime_process':runtime_process})
         deadline = time.monotonic() + 30
         while True:
             try:
@@ -157,30 +256,51 @@ def setup(args):
                 if not refused(error) or time.monotonic() >= deadline:
                     raise SetupError("service_not_ready", "Genesis did not expose MCP at the requested address. Check its status/logs and the actual port; setup will not restart another instance.") from error
                 time.sleep(.25)
-    # Reuse the connector for all plugin packaging and registration decisions.
-    status = connector.connect(url, args.config_dir, args.codex_home, output=sys.stderr)
+    expected_release = os.environ.get('GENESIS_VERSION')
+    if not expected_release or expected_release == 'latest':
+        manifest = json.loads((ROOT/'plugins/genesis/.codex-plugin/plugin.json').read_text())
+        expected_release = 'mcp-preview-' + manifest['version']
+    build = status.get('build', {})
+    expected_revision = getattr(args, 'expected_revision', None)
+    if build.get('release') != expected_release or (expected_revision and build.get('revision') != expected_revision):
+        if getattr(args, 'upgrade', False):
+            return upgrade_owned(args, url, token)
+        raise SetupError('upgrade_required',
+            f"Expected {expected_release}" + (f" at {expected_revision}" if expected_revision else '') +
+            f", but the service at {url} reports {build or 'an unidentified build'}. "
+            "Inspect active tasks, stop the previous Genesis host, then rerun with --method release. User configuration is preserved.")
+    if agent == 'codex':
+        status = connector.connect(url, args.config_dir, args.codex_home, output=sys.stderr)
+    mcp_config = args.config_dir / 'mcp-client.json'
+    connector.write_private_json(mcp_config, {'mcpServers': {'genesis': {
+        'type': 'http', 'url': url, 'headers': {'Authorization': 'Bearer '+token}}}})
     origin = url.rsplit("/mcp", 1)[0]
     ready = bool(status.get("model_ready"))
     return {
         "status": "ready" if ready else "needs_model_configuration",
-        "service_started": started, "plugin_installed": True,
+        "service_started": started, "plugin_installed": agent == "codex",
+        "build": build, "mcp_config_file": str(mcp_config),
+        "skill_path": str(ROOT / "plugins/genesis/skills/genesis"),
         "runtime_process": runtime_process,
         "configuration_ready": ready, "provider_connection_tested": False,
         "mcp_url": url, "dashboard_url": origin, "settings_url": origin + "/settings",
         "config_files": status.get("config_files", {}),
         "source_root": str(ROOT), "warnings": status.get("warnings", []),
-        "next_steps": (["Open a new Codex session, run genesis_check and genesis_list_models, then ask to use Genesis for development."] if ready else
+        "next_steps": (["Load the Genesis Skill and private MCP connection in your coding agent, then run genesis_check and genesis_list_models."] if ready else
                        ["Follow the installed Skill's references/configuration.md: ask for the missing provider/model and authentication choice, and preserve existing configuration.",
                         "Use config_files from this result. Prepare non-secret model configuration; let the user fill credentials locally or complete vendor CLI login on the Genesis host.",
                         "In a session with the tools loaded, call genesis_reload_config to apply file edits, then genesis_check and genesis_list_models. No Genesis dashboard interaction is required."])
     }
 
 
-def main(argv=None):
+def main(argv=None, default_agent="codex"):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", help="Local MCP URL; otherwise use the lifecycle launcher saved URL, then http://127.0.0.1:9999/mcp")
     parser.add_argument("--config-dir", type=Path, default=connector.default_config_dir())
     parser.add_argument("--codex-home", type=Path)
+    parser.add_argument("--upgrade", action="store_true", help="Upgrade an idle instance owned by this installer; keep a rollback copy")
+    parser.add_argument("--agent", choices=["none", "codex"], default=default_agent)
+    parser.add_argument("--expected-revision", default=os.environ.get("GENESIS_EXPECTED_REVISION"))
     parser.add_argument("--server-command", help="Path to bin/genesis, or the native Windows genesis-desktop.exe host")
     parser.add_argument("--method", choices=["auto", "source", "release"], default="auto")
     parser.add_argument("--release-dir", type=Path, default=windows.default_install_dir() if IS_WINDOWS else Path.home()/".local/share/genesis/server")

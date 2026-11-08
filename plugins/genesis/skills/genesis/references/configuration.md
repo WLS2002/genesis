@@ -6,48 +6,35 @@ Complete model setup through local files and MCP. The user can use Genesis entir
 
 Call `genesis_check` and use its `config_files.config` and `config_files.credentials`. These are absolute paths on the **Genesis host**, using that service's actual platform/configuration directory. The Codex setup result includes the same fields. Edit on that host; a calling agent's separate container or home directory may not be the service's filesystem.
 
-Reuse a working profile. When a model is missing, ask for the provider, model ID and authentication method; ask for a custom base URL only when needed. A subscription for the calling agent does not automatically select or authenticate a Genesis model. Obtain the user's choice before changing an existing default. The first profile is the default.
+Reuse a working profile. When a model is missing, ask for the provider, model ID and authentication method; ask for a custom base URL only when needed. A subscription for the calling agent does not automatically select or authenticate a Genesis model. Obtain the user's choice before changing an existing default. Respect `[llm].default_provider_profile` and each account's configured default model; otherwise Genesis uses its configured fallback order.
 
 ## Prepare non-secret configuration
 
 Merge the selected profile into `config_files.config`, preserving other settings and profiles. Use unique profile IDs. For an existing flat `[llm] model` configuration, preserve its effective settings when migrating to profiles; avoid duplicate TOML tables. The examples below are shapes: replace `SELECTED_MODEL_ID` and any endpoint placeholder with the user's actual choice before saving.
 
-API-key profile:
+Canonical API-key account:
 
 ```toml
-[[llm.models]]
-id = "default"
-model = "openai:SELECTED_MODEL_ID"
+[llm]
+default_provider_profile = "work"
+
+[[llm.providers]]
+id = "work"
+provider = "openai"
+auth_mode = "api_key"
+api_key_env_var = "WORK_LLM_API_KEY"
+default_model = "SELECTED_MODEL_ID"
+concurrency = 3
+
+[[llm.providers.models]]
+model = "SELECTED_MODEL_ID"
 ```
 
-Use the chosen provider prefix, such as `openai` or `anthropic`. For an OpenAI-compatible custom endpoint, the actual provider is `openai`:
-
-```toml
-[[llm.models]]
-id = "custom"
-model = { provider = "openai", id = "SELECTED_MODEL_ID", base_url = "https://YOUR_ENDPOINT/v1" }
-```
-
-ChatGPT/Codex subscription:
-
-```toml
-[[llm.models]]
-id = "codex"
-model = "openai_codex:SELECTED_MODEL_ID"
-```
-
-Claude subscription:
-
-```toml
-[[llm.models]]
-id = "claude"
-model = "anthropic:SELECTED_MODEL_ID"
-auth_mode = "oauth"
-```
+Use the selected provider. For an OpenAI-compatible endpoint keep `provider = "openai"` and add its actual `base_url` to the account. For a Codex subscription use `provider = "openai_codex"` and `auth_mode = "oauth"`; for a Claude subscription use `provider = "anthropic"` and `auth_mode = "oauth"`. Keep the selected model in the account's `[[llm.providers.models]]` inventory. `model_id` in MCP selects the configured account/default model. Read the checkout's `docs/llm-profiles.md` for canonical configuration details and preserve existing legacy settings when migrating.
 
 ## Complete authentication locally
 
-**API key:** prepare a private `config_files.credentials` file if needed (directory mode `0700`, file mode `0600` on POSIX), preserving existing entries. Tell the user its exact absolute path and the required top-level TOML key, for example `OPENAI_API_KEY = "..."` or `ANTHROPIC_API_KEY = "..."`. The user fills the real value in their local editor and reports completion. Keep secrets out of chat, tool arguments, logs and project files; inspect presence/parse success without printing values. Use the provider's credential key, not the profile ID. An empty placeholder is not a credential.
+**API key:** prepare a private `config_files.credentials` file if needed (directory mode `0700`, file mode `0600` on POSIX), preserving existing entries. Tell the user its exact absolute path and the required top-level TOML key, for example `OPENAI_API_KEY = "..."` or `ANTHROPIC_API_KEY = "..."`. The user fills the real value in their local editor and reports completion. Keep secrets out of chat, tool arguments, logs and project files; inspect presence/parse success without printing values. Use the account's `api_key_env_var` (for this example `WORK_LLM_API_KEY`), or its provider fallback credential key, not the profile ID. An empty placeholder is not a credential.
 
 **Subscription:** reuse an available vendor CLI login on the Genesis host under the account running Genesis. If needed, ask the user to complete `codex login` for `openai_codex`, or run `claude` and log in for an Anthropic OAuth profile. The vendor's login may open its own authentication page; no Genesis GUI interaction is required. Genesis imports the login into its managed OAuth file when resolving the profile. Preserve that file and let the existing importer/refresh mechanism manage it. For custom OAuth paths, environment-token alternatives or login problems, read the source checkout's `docs/llm-oauth.md` when available.
 

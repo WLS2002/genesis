@@ -54,6 +54,9 @@ with tempfile.TemporaryDirectory(prefix="Genesis smoke 测试 ") as temporary:
         assert run.returncode == 2, run.returncode
         result = json.loads(run.stdout)
         assert result["plugin_installed"] and not result["configuration_ready"]
+        expected_build = json.loads((args.assets / f"build-info-{args.platform}.json").read_text())
+        assert result['build']['revision'] == expected_build['revision'], result
+        assert result['build']['platform'] == args.platform, result
         backend = runtime / "resources/genesis-backend" if os.name == "nt" else runtime
         vendor_names = {"linux_x64": "linux-x86_64", "linux_arm64": "linux-arm64",
             "darwin_x64": "macos-x86_64", "darwin_arm64": "macos-arm64", "windows_x64": "windows-x64"}
@@ -65,15 +68,52 @@ with tempfile.TemporaryDirectory(prefix="Genesis smoke 测试 ") as temporary:
         check = connector.verify_server(url, token)
         assert Path(check["config_files"]["config"]).resolve() == (config / "config.toml").resolve()
         assert Path(check["config_files"]["credentials"]).resolve() == (config / "credentials.toml").resolve()
-        (config / "config.toml").write_text('[[llm.models]]\nid = "offline"\nmodel = "openai:offline-fixture"\n', encoding="utf-8")
+        (config / "config.toml").write_text('[llm]\ndefault_provider_profile = "offline"\n[[llm.providers]]\nid = "offline"\nprovider = "openai"\nauth_mode = "api_key"\ndefault_model = "offline-fixture"\n[[llm.providers.models]]\nmodel = "offline-fixture"\n', encoding="utf-8")
         (config / "credentials.toml").write_text('OPENAI_API_KEY = "offline-fixture"\n', encoding="utf-8")
         loaded = connector.rpc(url, token, "tools/call", {"name": "genesis_reload_config", "arguments": {}})["result"]
         assert not loaded["isError"] and loaded["structuredContent"]["model_ready"], loaded
         assert loaded["structuredContent"]["configuration_reloaded"]
         models = connector.rpc(url, token, "tools/call", {"name": "genesis_list_models", "arguments": {}})["result"]
         assert models["structuredContent"]["models"][0]["id"] == "offline"
+
+        # Characterize native stop/restart and replacement with the same tested
+        # package. Changing only its identity models an older idle installation.
+        identity = next(backend.glob('lib/evo_git-*/priv/mcp-build-info.json'))
+        old = json.loads(identity.read_text())
+        identity.write_text(json.dumps({**old, 'revision':'0'*40}), encoding='utf-8')
+        upgrade_command = [sys.executable, str(ROOT/'scripts/setup-genesis.py'), '--method','release',
+            '--json','--url',url,'--release-dir',str(runtime),'--config-dir',str(config),
+            '--upgrade','--expected-revision',expected_build['revision']]
+        upgraded = subprocess.run(upgrade_command,env=env,capture_output=True,text=True,encoding='utf-8',timeout=240)
+        print(upgraded.stderr)
+        print(upgraded.stdout)
+        assert upgraded.returncode == 0, upgraded.returncode
+        result = json.loads(upgraded.stdout)
+        assert not result['plugin_installed']
+        assert result['build']['revision'] == expected_build['revision']
+        assert Path(result['previous_installation']).is_dir()
+        assert connector.verify_server(url,token)['model_ready']
+
+        # A candidate with an unacceptable identity must restore the prior host.
+        rejected_command = [*upgrade_command[:-1], 'f'*40]
+        rejected = subprocess.run(rejected_command,env=env,capture_output=True,text=True,encoding='utf-8',timeout=240)
+        print(rejected.stdout)
+        assert rejected.returncode == 1
+        assert json.loads(rejected.stdout)['code'] == 'upgrade_failed'
+        deadline=time.monotonic()+30
+        while True:
+            try:
+                restored=connector.verify_server(url,token)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:raise
+                time.sleep(.25)
+        assert restored['build']['revision'] == expected_build['revision']
+        assert restored['model_ready']
+        result['runtime_process'] = json.loads((config/'runtime.json').read_text())['runtime_process']
         print(json.dumps({"platform": args.platform, "native_package_install": True,
             "codex_plugin_registration": True, "tools": 9, "file_configuration_reload": True,
+            "generic_upgrade_and_rollback": True,
             "provider_connection_tested": False}))
     finally:
         if sys.exc_info()[0] is not None:
