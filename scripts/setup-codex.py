@@ -140,6 +140,7 @@ def stop_owned(args, url, token, record, *, require_idle=True):
     if not launcher.is_relative_to(args.release_dir):
         raise SetupError('unmanaged_service', 'The launcher is outside this managed installation.')
     if require_idle:
+        print('Checking Genesis is idle before upgrading.', file=sys.stderr, flush=True)
         for state in ('pending','running','finalizing','cancelling'):
             reply = connector.rpc(url, token, 'tools/call', {'name':'genesis_list_tasks', 'arguments':{'status':state,'limit':1}})['result']
             tasks = reply.get('structuredContent', {})
@@ -155,10 +156,12 @@ def stop_owned(args, url, token, record, *, require_idle=True):
         actual = subprocess.run(['powershell','-NoProfile','-NonInteractive','-Command',query], capture_output=True,text=True,check=True).stdout.strip()
         if os.path.normcase(actual) != os.path.normcase(str(launcher)):
             raise SetupError('unmanaged_service', 'The saved Windows process no longer belongs to this installation.')
+        print('Stopping the managed Genesis host.', file=sys.stderr, flush=True)
         os.kill(pid, signal.SIGTERM)
     else:
         run([launcher, 'stop'], runtime_environment(args))
     deadline = time.monotonic()+20
+    print('Waiting for the previous Genesis endpoint to close.', file=sys.stderr, flush=True)
     while time.monotonic() < deadline:
         if not endpoint_listening(url):
             return
@@ -169,10 +172,15 @@ def stop_owned(args, url, token, record, *, require_idle=True):
 def endpoint_listening(url):
     address = urlsplit(url)
     try:
-        with socket.create_connection((address.hostname, address.port or 80), timeout=1):
+        # Windows can take longer than one second to report loopback refusal.
+        with socket.create_connection((address.hostname, address.port or 80), timeout=5):
             return True
     except ConnectionRefusedError:
         return False
+    except TimeoutError:
+        # No refusal was observed. Continue the bounded wait rather than
+        # claiming shutdown or aborting an otherwise successful stop.
+        return True
 
 
 def upgrade_owned(args, url, token):
@@ -180,6 +188,7 @@ def upgrade_owned(args, url, token):
     if not record_path.is_file():
         raise SetupError('unmanaged_service', 'No runtime.json ownership record exists. Inspect and stop the previous host before reinstalling.')
     record = json.loads(record_path.read_text())
+    print('Saving the previous Genesis installation for rollback.', file=sys.stderr, flush=True)
     # Prepare the rollback copy while the previous host is still available.
     backup_root = Path(tempfile.mkdtemp(prefix='.genesis-rollback-',dir=args.release_dir.parent))
     backup = backup_root/'runtime'

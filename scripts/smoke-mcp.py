@@ -123,9 +123,16 @@ with tempfile.TemporaryDirectory(prefix="Genesis smoke 测试 ") as temporary:
                 if log.exists():
                     print(log.read_text(encoding="utf-8", errors="replace")[-10000:])
         if os.name == "nt":
-            if result and result.get("runtime_process"):
+            current = result or {}
+            ownership = config / 'runtime.json'
+            if ownership.is_file():
+                record = json.loads(ownership.read_text())
+                if record.get('url') == url and Path(record.get('release_dir','')).resolve() == runtime.resolve():
+                    current = record
+            if current.get("runtime_process"):
                 # Kill only the existing Rust host; its lifetime pipe closes the BEAM.
-                subprocess.run(["taskkill", "/PID", str(result["runtime_process"]["pid"]), "/F"], check=True)
+                stopped = subprocess.run(["taskkill", "/PID", str(current["runtime_process"]["pid"]), "/F"], capture_output=True)
+                assert stopped.returncode in (0, 128), stopped.stderr
         elif (runtime / "bin/genesis").exists():
             subprocess.run([str(runtime / "bin/genesis"), "stop"], env=env, check=True)
         server.shutdown()

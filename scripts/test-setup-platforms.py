@@ -2,6 +2,7 @@
 """Platform routing of the shared setup entry, without launching a service."""
 import importlib.util
 from pathlib import Path
+import socket
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -13,6 +14,16 @@ SPEC.loader.exec_module(setup)
 
 
 class PlatformSetupTests(unittest.TestCase):
+    def test_closed_loopback_endpoint_is_detected_without_a_probe_timeout(self):
+        with socket.socket() as probe:
+            probe.bind(('127.0.0.1', 0))
+            port = probe.getsockname()[1]
+            self.assertFalse(setup.endpoint_listening(f'http://127.0.0.1:{port}/mcp'))
+
+    def test_probe_timeout_is_inconclusive_and_never_claims_the_endpoint_stopped(self):
+        with patch.object(setup.socket, 'create_connection', side_effect=TimeoutError('timed out')):
+            self.assertTrue(setup.endpoint_listening('http://127.0.0.1:9999/mcp'))
+
     def test_windows_reuses_the_existing_headless_desktop_host(self):
         with tempfile.TemporaryDirectory() as root, patch.object(setup, "IS_WINDOWS", True, create=True):
             release = Path(root)
