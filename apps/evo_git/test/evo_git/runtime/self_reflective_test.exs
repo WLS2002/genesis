@@ -59,42 +59,39 @@ defmodule EvoGit.Runtime.SelfReflectiveTest do
 
       assert %EvoGit.Core.ContextNode{} = spec.context_node
       assert spec.context_node.path == "./"
-      # "/nonexistent/dir" is not a dir, so resolve_source_root falls back to
-      # source_root() — always a binary (File.cwd!() here, a real dir → load).
-      assert is_binary(spec.context_node.repo)
+      # The spec NEVER loads the source CONTEXT tree; the repo is always the
+      # "[system]" placeholder.
+      assert spec.context_node.repo == "[system]"
     end
 
-    test "bare context node with no env set falls back to File.cwd!()" do
+    test "bare context node with no env set keeps the [system] placeholder repo" do
       with_self_reflective_env(nil, nil, fn ->
         spec = SelfReflective.build_spec("x")
         assert spec.context_node.path == "./"
-        # source_root() → File.cwd!(), which IS a real dir in tests, so
-        # ContextNode.load runs — either way repo == File.cwd!().
-        assert spec.context_node.repo == File.cwd!()
+        assert spec.context_node.repo == "[system]"
       end)
     end
 
-    test ":source_root pointing at a real dir loads the ContextNode over it" do
+    test ":source_root pointing at a real dir is not loaded into the context node" do
       tmp_dir = tmp_dir!("evogit-selfref-real")
       File.mkdir_p!(tmp_dir)
       File.write!(Path.join(tmp_dir, "CONTEXT.md"), "# Tmp\n")
       on_exit(fn -> File.rm_rf!(tmp_dir) end)
 
       spec = SelfReflective.build_spec("x", source_root: tmp_dir, node_path: "./")
-      assert spec.context_node.repo == tmp_dir
+      assert spec.context_node.repo == "[system]"
+      refute Keyword.has_key?(spec.opts, :source_root)
     end
 
-    test ":source_root pointing at a nonexistent dir falls back to the app env value" do
+    test "a resolvable source root does not change the context node" do
       tmp_dir = tmp_dir!("evogit-selfref-env")
       File.mkdir_p!(tmp_dir)
       File.write!(Path.join(tmp_dir, "CONTEXT.md"), "# Tmp\n")
       on_exit(fn -> File.rm_rf!(tmp_dir) end)
 
       with_self_reflective_env(tmp_dir, nil, fn ->
-        spec = SelfReflective.build_spec("x", source_root: "/nonexistent/dir", node_path: "./")
-        # "/nonexistent/dir" is not a dir → falls back to source_root() = the
-        # app-env tmp dir (a real dir) → ContextNode.load runs over it.
-        assert spec.context_node.repo == tmp_dir
+        spec = SelfReflective.build_spec("x", node_path: "./")
+        assert spec.context_node.repo == "[system]"
       end)
     end
   end

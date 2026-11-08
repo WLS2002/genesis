@@ -335,6 +335,16 @@ defmodule EvoGit.Agent.Tools do
     ElixirEval.execute(args, repo_path, repo_root)
   end
 
+  # The task-control tools (`genesis_*`) are served by the SHARED catalog in
+  # `EvoGit.TaskControl.Tools` — the same nine tools the MCP endpoint exposes.
+  # They are dispatched BEFORE the write guards on purpose: they are control
+  # tools, not write tools (starting a task is task lifecycle, not a repo
+  # write), so their classification in `write_tool?/1` / `write_call?/2` stays
+  # false and a repo-less agent can use them.
+  defp dispatch_tool_call("genesis_" <> _ = name, args, _repo_path, _repo_root, _node_path) do
+    EvoGit.Agent.Tools.GenesisTools.execute(name, args)
+  end
+
   defp dispatch_tool_call(name, args, repo_path, repo_root, node_path) do
     maybe_block_repo_less(name, args, repo_path, repo_root, node_path)
   end
@@ -512,7 +522,9 @@ defmodule EvoGit.Agent.Tools do
   — `bash`, `shell`, `run_bash`, `run_powershell`, …), the scheduler's tool
   ceiling (`[:scheduler, :max_tool_timeout]`, `1_800_000` ms by default) for
   `job_output`, `30_000` for `elixir_eval` (5s engine cap plus bounded
-  authorization/cleanup headroom), and `nil` for every other tool (meaning
+  authorization/cleanup headroom), `30_000` for `genesis_get_task` (its
+  `wait_seconds` poll can block up to 20s before the read completes), and `nil`
+  for every other tool (meaning
   "no per-tool default — the dispatcher's generic default applies").
   The evaluator's numeric `timeout_ms` is ONLY its inner engine cap;
   ToolDispatch separately floors write/sudo to the approval window plus 30s,
@@ -539,6 +551,7 @@ defmodule EvoGit.Agent.Tools do
       @shell_tool_name -> @shell_tool_default_timeout_ms
       "job_output" -> job_output_default_timeout_ms()
       "elixir_eval" -> 30_000
+      "genesis_get_task" -> 30_000
       _other -> nil
     end
   end
