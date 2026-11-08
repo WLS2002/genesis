@@ -21,7 +21,6 @@ Shared tool rendering belongs to `../agents_live/tool_call_display.ex`, shared s
 The exact English suggestion labels and submitted prompts are "Show my running tasks", "Check system status and capacity", "Start a task for me", and "Explain how tasks are scheduled", all translated with Gettext.
 Every suggestion reads as a natural operator request, so two of them explicitly ask to inspect live runtime state or to start work.
 The buttons retain `phx-click="send_message"` and translated `phx-value-message` values, dispatching through the exact same send path as typed input.
-Its `source_gate?` attr defaults to false and replaces all suggestion buttons with download guidance when true.
 The empty state uses `min-h-full` and vertical padding rather than a fixed height so short screens can scroll.
 `ChatMessages.message_list/1` renders oldest-first transcript entries with stable `chat-entry-<id>` wrappers and responsive spacing.
 User wrappers remain `flex justify-end` around a direct bubble div; assistant/error wrappers are left-aligned.
@@ -77,12 +76,6 @@ Runners are captured at spawn time through `:approval_pending_runner` (one node 
 The parent delegates both approval broadcasts and response events to this workflow, passes `busy={ApprovalWorkflow.busy?(assigns, request.request_id)}` to each card, and renders `approval_error` with Gettext-wrapped recovery/response retry guidance.
 No approval state or sequence belongs in persisted `ChatState`; recovery reconstructs cards from the live core service.
 
-`SourceGate.source_gate/1` renders the local-only source-download banner with stable ids `genesis-source-gate` and `genesis-source-download`, `download_source`, a disabled/busy cloning state, and a node-aware System link.
-`SourceGate.visible?/1` permits only nil/local nodes and `blocked?/1` blocks only a known `source_available == false`, never unknown or backend-unavailable results.
-`spawn_availability_check/3` and `spawn_clone/2` capture `:source_availability_runner` and shared `:source_clone_runner` at spawn time before starting supervised tasks, then invoke the runners inside `EvoDash.SafeCall` so every runner outcome sends a result message.
-The messages are `{:source_availability_loaded, seq, node, result}` and `{:source_clone_result, node, result}`; default implementations delegate to the total `EvoDash.SourceStatus` wrapper, never directly to the optional core backend.
-Availability failures degrade to `{:unavailable, :runner_error}`; clone failures become error values so loading flags cannot wedge.
-
 ### Transcript and stream helpers
 
 `Transcript` owns oldest-first normalized entries `%{id, role: :user | :assistant | :error, text, streaming}` and total append, streaming replacement, finalization, and error helpers.
@@ -108,7 +101,7 @@ The only accepted spec keys are `"provider_profile_id"`, `"model"` and `"reasoni
 The shared helper reconciles nil to the viewed node's configured default, an empty map is explicit Auto, and false is malformed rather than Auto.
 A canonical spec, including the empty Auto map, removes `selected_model_id` during build/restore so an old pin cannot reappear after reconciliation.
 A scope includes the remote target id even while its node resolves locally, preventing a disconnected target from borrowing the local pin.
-Runtime seq counters, loaded configs, raw-view ids, approvals and source-gate state are never persisted.
+Runtime seq counters, loaded configs, raw-view ids and approvals are never persisted.
 `ModelSelect.load/1` returns `{:ok, %{node: node, config: resolved_config, model_selection_enabled: boolean}}` or an error; nil normalizes to local.
 Invalid nonatom or boolean nodes return `:invalid_model_selection_node`, and a remote success with a nonmap config returns `:invalid_model_config_response` rather than becoming a usable snapshot.
 The config snapshot is the full server-only resolved config, not a persisted task selection or browser payload.
@@ -134,12 +127,12 @@ State and transcript restoration expect atom-keyed outer maps rather than JSON s
 
 All user-facing strings are Gettext-wrapped, with Chinese meaning comments where useful; never modify PO/POT files during feature work.
 Use existing Tailwind/DaisyUI tokens and HEEx, with no new CSS dependency and no hardcoded theme colors.
-Preserve stable DOM ids, event names, hooks, escaped raw text, safe Markdown, streaming behavior, approvals and source-download semantics when changing presentation.
+Preserve stable DOM ids, event names, hooks, escaped raw text, safe Markdown, streaming behavior and approvals when changing presentation.
 The parent owns all business state and uses `EvoDash.NodeContext` for node-aware operations; no support component should introduce store or RPC calls on the render path.
 Store/RPC calls use `EvoDash.SafeCall` either as guarded click mutations or supervised async tasks, never bare try/rescue.
 `SafeCall.start/4` sends nested tags verbatim: `{:tag, seq, node}` arrives as `{{:tag, seq, node}, result}`.
 There is no polling; refreshes follow user actions or node-filtered PubSub events.
-Keep agent-history `chat_fetch_seq`, terminal-task `chat_task_fetch_seq`, source `source_check_seq`, and remote model `model_select_seq` separate so late history updates cannot discard terminal results.
+Keep agent-history `chat_fetch_seq`, terminal-task `chat_task_fetch_seq` and remote model `model_select_seq` separate so late history updates cannot discard terminal results.
 Real agent changed_fields payloads are keyword lists and history refetches require `is_list(changed_fields) and Keyword.has_key?(changed_fields, :message_count)`.
 Terminal completed/cancelled/failed tasks finalize from the lite task read; live or unknown statuses must retain task refs rather than finalize.
 Chat persistence is local-node-only and in-memory; remount reconciliation is one-shot, New chat retains old chats with a cap of ten, and tests touching it reset the shared ChatHistory store.
@@ -158,7 +151,7 @@ Mounted explicit-pin sends require the app-global TaskRegistry admission process
 The three mounted canonical-send tests currently find no task because that registry resolves its own empty config and rejects the account before enqueueing; the test harness must align singleton config without removing admission or weakening the stored-options assertions.
 Core Store.Codec atomizes the outer model_spec key while keeping model_id_locked string-keyed, so `HomeLiveTest.assert_task_selection/2` must read `:model_spec` and `"model_id_locked"` instead of its stale string-only spec assertion once admission fixtures are aligned.
 Additional sibling regressions should cover nonatom/nil-node scopes, unscoped remote snapshots and invalid load-node arguments.
-Keep business assertions for four suggestion sends, source gate, direct user bubble shape, raw/copy attributes, safe Markdown and streaming markers intact.
+Keep business assertions for four suggestion sends, direct user bubble shape, raw/copy attributes, safe Markdown and streaming markers intact.
 No sibling tests are modified by helper-only work; persistent additions and mounted event/send/persistence coverage belong to the parent integration.
 
 ### Parent-page integration requirements

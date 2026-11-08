@@ -85,7 +85,7 @@ Per-suite cadences and budgets:
 
 - `tasks_live_test.exs` — `@wait_poll_ms` = 2 ms via `wait_until/3` (a 2000 ms default deadline; the function's own comment still says "in seconds" — the code compares milliseconds); `flush_tasks_load/2` drains a load chain `flush_loading` → `tasks_loading == false` → `drain_async_loads/2` (a leading `:sys.get_state/1`, then wait out an armed `tasks_reload_pending` debounce, then `await_view_async_loads/2`) → `render/1`.
 - `review_live_test.exs` — `@wait_poll_ms` = 2 ms inside `wait_until/2` (5 s budget).
-- `home_live_test.exs` — `@poll_interval_ms` = 2 ms inside `wait_until/2` (2 s budget); `await_source_available/3` 2 s.
+- `home_live_test.exs` — `@poll_interval_ms` = 2 ms inside `wait_until/2` (2 s budget).
 - `welcome_live_test.exs` — `@llm_test_poll_ms` = 2 ms under a `@llm_test_await_ms` 5 s budget (`await_llm_test_result/1`, `await_spawned_llm_test/0`; neither ever fails the test).
 - `projects_live_test.exs` — `wait_assigns/3`, `wait_for_fake_callers/3` and the GitHub describe's `wait_until/3` poll at 2 ms (3 s / 2 s budgets); `wait_for_task_terminal/2` polls `TaskRegistry.get_task/1` every 2 ms with a 10 s budget and is best-effort (it only keeps a still-spawning git port from racing a temp-dir teardown).
 - `agents_live_test.exs` — `wait_until/2` still polls at 10 ms (5 s budget) and `await_latch/2` polls a shared `:atomics` flag at 1 ms (5 s, never raises).
@@ -198,8 +198,6 @@ Responder failures retain a visible error and retryable card, and absent/resolve
 The source/chat node owns request filtering, pending reads and decisions independently of evaluator `target_node`; source-stamped resolutions from foreign nodes are ignored, while legacy three-element resolution events remain supported.
 Page tests exercise nested Workflow result routing, live-arrival overlays and resolution tombstones during pending recovery, obsolete generations/scopes, and New-chat invalidation of late responses.
 Pure helper and card tests are async without `/help` mounts, whereas these mounted-page approval tests remain in the existing sync suite because they share ChatHistory, the isolated global Store/TaskRegistry pair, scheduler configuration, and approval app-env seams.
-Genesis-source gate: the two `:source_clone_runner` stubs carry NO artificial delay — "Cloning…" is assigned synchronously by `download_source`, so `render_click/1`'s reply already carries the busy markup; completion is polled via `wait_until(source_busy == nil)` / `await_source_available/3`.
-The remote-node negative `refute_receive :availability_runner_called, 50` is backed by construction (`maybe_check_source/1` is the only spawn site, gated on `SourceGate.visible?(current_node)`) plus `assert assigns(view).source_available == nil`.
 
 ## Notes for Agents
 
