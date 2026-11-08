@@ -30,7 +30,6 @@ defmodule EvoGit.Agent.Tools do
   alias EvoGit.Agent.Tools.SkillEnable
   alias EvoGit.Agent.Tools.SkillDisable
   alias EvoGit.Agent.Tools.SkillWhere
-  alias EvoGit.Agent.Tools.ElixirEval
   alias EvoGit.Agent.Tools.JobOutput
   alias EvoGit.Agent.Tools.JobList
   alias EvoGit.Agent.Tools.JobKill
@@ -40,9 +39,10 @@ defmodule EvoGit.Agent.Tools do
   # (chatbot-style, no worktree) must never touch git or write files, and
   # agents operating inside a READ-ONLY foreign repo must not modify anything —
   # `execute/5` blocks these for such agents as defense-in-depth.
-  # `elixir_eval` has its OWN owner/lifecycle authorization boundary rather than
-  # these pd-based file-write guards; its write/sudo tiers require exact-code
-  # approval. Legacy `run_command` is unconditionally refused by `execute/5`.
+  # `elixir_eval` (the old assistant evaluator) was REMOVED outright: no agent
+  # exposes it, `execute/5` has no route for it, and a hallucinated call is
+  # answered with the generic unknown-tool error. Legacy `run_command` is
+  # unconditionally refused by `execute/5`.
   # The three background-job control tools
   # (`job_output`, `job_list`, `job_kill`) are control tools for the same
   # reason — see `write_call?/2` below for the ONE write capability that is an
@@ -77,8 +77,8 @@ defmodule EvoGit.Agent.Tools do
   @doc """
   Returns a list of all available tool schemas for ReqLLM.
 
-  Note: `elixir_eval` is dispatch-only and exposed by the reflective assistant's
-  own schema list, NEVER by either shared schema set. `run_command` is refused.
+  Note: `run_command` is refused at dispatch; the built-in assistant advertises
+  the shared `genesis_*` task-control catalog from its own schema list.
   """
   def schemas do
     schemas =
@@ -131,10 +131,8 @@ defmodule EvoGit.Agent.Tools do
         JobKill.schema()
         # Git.schema()
         #
-        # NOTE: `elixir_eval` is deliberately NOT listed in either shared set.
-        # Only the reflective assistant advertises it, and execute/5 routes it
-        # through its own runtime authorization, not schema membership or pd roles.
-        # Legacy `run_command` is refused even for that assistant.
+        # NOTE: `run_command` is refused at dispatch, and the removed
+        # `elixir_eval` evaluator has no route at all.
       ]
 
     schemas
@@ -289,7 +287,7 @@ defmodule EvoGit.Agent.Tools do
   # Never let stale assistants or hallucinated calls bypass exact-code approval.
   # CLI compatibility is independent: it calls CommandShell directly.
   def execute("run_command", _args, _repo_path, _repo_root, _node_path) do
-    "Error: use elixir_eval exact-code approval path"
+    "Error: run_command is not available to agents; use the task-control tools or the dashboard."
   end
 
   def execute(tool_name, args, repo_path, repo_root, node_path) when is_map(args) do
@@ -324,15 +322,8 @@ defmodule EvoGit.Agent.Tools do
   end
 
   # Reserved built-in route BEFORE pd-based write guards and custom fallback.
-  # ElixirEval.execute/3 fully authorizes against the actual scheduler owner and
-  # task lifecycle, including target_node, even if the name was hallucinated.
-  # Schema membership and missing tool-task role flags NEVER grant this capability.
   defp dispatch_tool_call("report_progress", args, _repo_path, _repo_root, _node_path) do
     EvoGit.Agent.Tools.ReportProgress.execute(args)
-  end
-
-  defp dispatch_tool_call("elixir_eval", args, repo_path, repo_root, _node_path) do
-    ElixirEval.execute(args, repo_path, repo_root)
   end
 
   # The task-control tools (`genesis_*`) are served by the SHARED catalog in
@@ -490,10 +481,6 @@ defmodule EvoGit.Agent.Tools do
   `edit`, `bash`, `Read`, …) straight from the LLM response: `serial_tool?("write")`
   and `serial_tool?("edit")` are `true`, `serial_tool?("bash")` is `false`.
   """
-  # Evaluations are ALWAYS serial, including read tier: one approval/effect
-  # sequence at a time, independent of file-write classification or custom tools.
-  def serial_tool?("elixir_eval"), do: true
-
   def serial_tool?(tool_name) when is_binary(tool_name) do
     normalized = ToolNames.normalize(tool_name)
     normalized in @serial_tools or EvoGit.CustomTools.write_tool?(normalized)
@@ -521,14 +508,10 @@ defmodule EvoGit.Agent.Tools do
   explicitly: `120_000` for the platform shell tool (any accepted spelling of it
   — `bash`, `shell`, `run_bash`, `run_powershell`, …), the scheduler's tool
   ceiling (`[:scheduler, :max_tool_timeout]`, `1_800_000` ms by default) for
-  `job_output`, `30_000` for `elixir_eval` (5s engine cap plus bounded
-  authorization/cleanup headroom), `30_000` for `genesis_get_task` (its
+  `job_output`, `30_000` for `genesis_get_task` (its
   `wait_seconds` poll can block up to 20s before the read completes), and `nil`
   for every other tool (meaning
   "no per-tool default — the dispatcher's generic default applies").
-  The evaluator's numeric `timeout_ms` is ONLY its inner engine cap;
-  ToolDispatch separately floors write/sudo to the approval window plus 30s,
-  even against an explicit outer `timeout`, still capped by max_tool_timeout.
   `job_list` / `job_kill` are fast registry calls and keep the generic default.
 
   The `job_output` ceiling is DERIVED on every call, never a compile-time
@@ -550,7 +533,6 @@ defmodule EvoGit.Agent.Tools do
     case ToolNames.normalize(tool_name) do
       @shell_tool_name -> @shell_tool_default_timeout_ms
       "job_output" -> job_output_default_timeout_ms()
-      "elixir_eval" -> 30_000
       "genesis_get_task" -> 30_000
       _other -> nil
     end
