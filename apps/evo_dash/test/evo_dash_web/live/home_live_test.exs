@@ -1798,7 +1798,11 @@ defmodule EvoDashWeb.HomeLiveTest do
         end
       end)
 
-      assert EvoGit.Config.config_path() == config_path
+      # Windows: config_path() returns forward slashes while the value above was
+      # built with backslashes, so compare separator/case-normalized paths (an exact
+      # comparison, not a substring match).
+      normalize = fn p -> p |> String.replace("\\", "/") |> String.downcase() end
+      assert normalize.(EvoGit.Config.config_path()) == normalize.(config_path)
 
       File.write!(config_path, """
       [llm]
