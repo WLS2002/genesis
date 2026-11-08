@@ -1173,20 +1173,17 @@ defmodule EvoDashWeb.ProjectsLiveTest do
       :ok
     end
 
-    test "mounts ProjectsLive at / with the dashboard nav highlighted", %{conn: conn} do
+    test "mounts HomeLive at / — the assistant is the default entry", %{conn: conn} do
       {:ok, _view, html} = live(conn, "/")
 
-      # Projects page UI (empty state), not the chat page
-      assert html =~ "Open a project to get started"
+      # The assistant chat page is the root entry, not the projects page.
+      assert html =~ "chat-form"
+      refute html =~ "project-omnibox"
       refute html =~ "task-launch-button"
-      refute html =~ "chat-form"
-      assert html =~ "project-omnibox"
 
-      # Sidebar :dashboard nav highlight — the Projects nav link renders
-      # aria-current="page" because ProjectsLive :index sets
-      # current_page={:dashboard} (URL-independent).
+      # Sidebar :assistant nav highlight — HomeLive sets current_page={:assistant}.
       [link] = html |> Floki.parse_document!() |> Floki.find(~s(a[aria-current="page"]))
-      assert Floki.text(link) =~ "Projects"
+      assert Floki.text(link) =~ "Assistant"
     end
 
     test "highlights the dashboard nav on /projects too (URL-independent)", %{conn: conn} do

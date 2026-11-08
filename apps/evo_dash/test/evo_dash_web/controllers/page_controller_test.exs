@@ -31,12 +31,19 @@ defmodule EvoDashWeb.PageControllerTest do
     :ok
   end
 
-  test "GET / renders the Projects page and GET /help the chat page", %{conn: conn} do
+  test "GET / renders the assistant page, GET /projects the Projects page and GET /help the chat page",
+       %{conn: conn} do
+    # The assistant is the DEFAULT entry: the chat composer is present and the
+    # projects command palette is not.
     html = html_response(get(conn, ~p"/"), 200)
-    # Projects page: command palette + task form present, no chat send form
-    assert html =~ "project-omnibox"
-    assert html =~ "AdaptiveInput"
-    refute html =~ "chat-form"
+    assert html =~ ~s(id="chat-form")
+    refute html =~ "project-omnibox"
+
+    # Projects keeps its own page.
+    projects_html = html_response(get(conn, ~p"/projects"), 200)
+    assert projects_html =~ "project-omnibox"
+    assert projects_html =~ "AdaptiveInput"
+    refute projects_html =~ "chat-form"
 
     # The Home chat page is the other entry point (HomeLive at /help).
     chat_html = html_response(get(conn, ~p"/help"), 200)
