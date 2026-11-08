@@ -34,7 +34,12 @@ defmodule EvoDashWeb.HomeLiveRenderTest do
       raw_entry_ids: MapSet.new(),
       pending_approvals: [],
       approval_error: nil,
-      chat_draft: ""
+      chat_draft: "",
+      workspace: "/work/project-a",
+      recent_projects: [
+        %{path: "/work/project-a", name: "Project A"},
+        %{path: "/work/project-b", name: "Project B"}
+      ]
     ]
 
     render_component(&EvoDashWeb.HomeLive.render/1, Keyword.merge(assigns, overrides))
@@ -107,7 +112,7 @@ defmodule EvoDashWeb.HomeLiveRenderTest do
   test "empty chat offers actionable prompts inside the message scroller, not the composer" do
     dom = page()
 
-    assert text(dom, "h1") == "Genesis Assistant"
+    assert text(dom, "h1") == "Assistant"
     assert text(dom, "#chat-messages h2") == "What would you like Genesis to do?"
     prompts = Floki.find(dom, "#chat-messages button[phx-click='send_message']")
     assert length(prompts) == 4
@@ -197,4 +202,30 @@ defmodule EvoDashWeb.HomeLiveRenderTest do
              ) == []
     end
   end
-end
+  test "no workspace disables the composer and shows workspace guidance" do
+    dom = page(workspace: nil)
+
+    assert Floki.find(dom, "#chat-form textarea[disabled]") != []
+    assert Floki.find(dom, "#chat-form button[type='submit'][disabled]") != []
+    assert text(dom, "#assistant-workspace-required h2") == "Select a workspace to start"
+    assert Floki.find(dom, "#assistant-workspace-required a[href*='/projects']") != []
+    assert attr(dom, "#assistant-workspace", "name") == ["workspace"]
+    assert attr(dom, "#assistant-workspace-form", "phx-change") == ["select_workspace"]
+  end
+
+  test "a selected workspace shows the selector and unlocks the composer" do
+    dom = page(workspace: "/work/project-b")
+
+    assert attr(dom, "#assistant-workspace", "name") == ["workspace"]
+    assert attr(dom, "#assistant-workspace option[selected]", "value") == ["/work/project-b"]
+    assert length(Floki.find(dom, "#assistant-workspace option")) == 3
+    assert Floki.find(dom, "#chat-form textarea[disabled]") == []
+    assert Floki.find(dom, "#assistant-workspace-required") == []
+  end
+
+  test "the workspace selector links to the projects page with the node parameter" do
+    dom = page(current_node_id: "workstation")
+
+    assert attr(dom, "#assistant-workspace-form a", "href") == ["/projects?node=workstation"]
+    assert text(dom, "#assistant-workspace-form a") == "Open or create project"
+  endend
