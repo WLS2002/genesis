@@ -82,11 +82,10 @@ defmodule EvoDashWeb.HomeLive do
         <div class="shrink-0 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-base-300 px-3 pt-3 pb-3 sm:px-4 sm:pt-4">
           <div class="min-w-0 basis-full sm:basis-auto sm:flex-1">
             <h1 class="text-base font-semibold truncate">
-              <%!-- zh_CN: 助手 --%>{gettext(
-                "Assistant"
-              )}
+              <%!-- zh_CN: 助手 --%>{gettext("Assistant")}
             </h1>
           </div>
+
           <form
             id="assistant-workspace-form"
             phx-change="select_workspace"
@@ -100,6 +99,7 @@ defmodule EvoDashWeb.HomeLive do
             >
               <%!-- zh_CN: "选择工作区…" --%>
               <option value="">{gettext("Select a workspace…")}</option>
+
               <option
                 :for={project <- @recent_projects}
                 value={project.path}
@@ -108,10 +108,12 @@ defmodule EvoDashWeb.HomeLive do
                 {project.name}
               </option>
             </select>
+
             <.link navigate={workspace_link(@current_node_id)} class="link link-primary text-sm">
               <%!-- zh_CN: "打开或新建项目" --%>{gettext("Open or create project")}
             </.link>
           </form>
+
           <form id="chat-llm-selection-form" class="basis-full order-last">
             <.llm_selection
               id="chat-llm-selection"
@@ -123,6 +125,7 @@ defmodule EvoDashWeb.HomeLive do
               compact
             />
           </form>
+
           <p
             :if={@model_select_load_error || @model_selection_error}
             role="alert"
@@ -130,6 +133,7 @@ defmodule EvoDashWeb.HomeLive do
           >
             {gettext("Model selection is unavailable. Choose a valid model or reconnect to the node.")}
           </p>
+
           <button
             type="button"
             phx-click="new_chat"
@@ -140,7 +144,6 @@ defmodule EvoDashWeb.HomeLive do
             <%!-- zh_CN: "新对话" --%>{gettext("New chat")}
           </button>
         </div>
-
         <!-- Genesis-source gate: the /help chat runs a repo-less `:reflect`
              agent whose reference is the managed Genesis source checkout. On a
              fresh install it is usually not downloaded yet, so a send would only
@@ -150,7 +153,6 @@ defmodule EvoDashWeb.HomeLive do
         <%= if SourceGate.blocked?(assigns) do %>
           <.source_gate source_busy={@source_busy} current_node_id={@current_node_id} />
         <% end %>
-
         <!-- Messages container (the AgentHistoryAutoScroll hook scrolls this element) -->
         <div
           id="chat-messages"
@@ -170,11 +172,13 @@ defmodule EvoDashWeb.HomeLive do
                 <h2 class="text-2xl sm:text-3xl font-semibold tracking-tight text-base-content">
                   {gettext("Select a workspace to start")}
                 </h2>
+
                 <p class="max-w-md text-sm leading-relaxed text-base-content/70">
                   <%!-- zh_CN: 助手需要一个工作区目录，才能读取代码并执行操作。 --%>{gettext(
                     "The assistant needs a workspace before it can read code or make changes."
                   )}
                 </p>
+
                 <.link navigate={workspace_link(@current_node_id)} class="link link-primary text-sm">
                   {gettext("Open or create project")}
                 </.link>
@@ -191,7 +195,6 @@ defmodule EvoDashWeb.HomeLive do
             />
           <% end %>
         </div>
-
         <!-- Pending evaluator and legacy command approvals block the reflect
              agent until the user decides. Cards stay visible while a response
              is in flight and on failure, between transcript and composer. -->
@@ -216,9 +219,11 @@ defmodule EvoDashWeb.HomeLive do
               <p>
                 {gettext("Could not load pending approvals: %{reason}", reason: inspect(reason))}
               </p>
+
               <p class="mt-1 text-base-content/70">
                 {gettext("Existing requests are kept. Retry to check for pending approvals.")}
               </p>
+
               <button
                 type="button"
                 phx-click="retry_approvals"
@@ -236,6 +241,7 @@ defmodule EvoDashWeb.HomeLive do
                 class="shrink-0 rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm text-base-content"
               >
                 <p>{gettext("Failed to respond: %{reason}", reason: inspect(reason))}</p>
+
                 <p class="mt-1 text-base-content/70">
                   {gettext("The request is still pending. Use its decision buttons to try again.")}
                 </p>
@@ -243,7 +249,6 @@ defmodule EvoDashWeb.HomeLive do
             <% end %>
           <% _ -> %>
         <% end %>
-
         <!-- Composer: pinned bottom, outside the messages scroller -->
         <div class="shrink-0 px-3 pt-2 pb-3 sm:px-4 bg-base-100">
           <form
@@ -257,9 +262,7 @@ defmodule EvoDashWeb.HomeLive do
               value={@chat_draft}
               phx-keydown="chat_keydown"
               phx-keyup="chat_keyup"
-              disabled={
-                @chat_status != :idle or SourceGate.blocked?(assigns) or is_nil(@workspace)
-              }
+              disabled={@chat_status != :idle or SourceGate.blocked?(assigns) or is_nil(@workspace)}
               placeholder={gettext("Message Genesis Assistant…")}
               rows="1"
               aria-label={gettext("Message Genesis Assistant…")}
@@ -280,6 +283,7 @@ defmodule EvoDashWeb.HomeLive do
               <.icon name="hero-paper-airplane" class="size-4" />
               <span class="sr-only"><%!-- zh_CN: "发送" --%>{gettext("Send")}</span>
             </button>
+
             <button
               type="button"
               phx-click="stop"
@@ -290,6 +294,7 @@ defmodule EvoDashWeb.HomeLive do
               <span class="sr-only"><%!-- zh_CN: "停止" --%>{gettext("Stop")}</span>
             </button>
           </form>
+
           <div class="mt-1.5 text-center text-xs text-base-content/60">
             <%!-- zh_CN: "回车发送 · Shift+回车换行" --%>{gettext(
               "Enter to send · Shift+Enter for a new line"
@@ -723,7 +728,6 @@ defmodule EvoDashWeb.HomeLive do
     end
   end
 
-  @impl true
   # Workspace selection: assign + persist only. Never restarts the running
   # task and never clears the transcript.
   @impl true
