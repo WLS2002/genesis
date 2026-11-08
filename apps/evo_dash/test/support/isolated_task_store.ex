@@ -386,10 +386,36 @@ defmodule EvoDash.Test.IsolatedTaskStore do
   # for the template (so a stale artifact from a crashed run can never be
   # reused) and for the scratch verification copy (so the `-wal`/`-shm` the
   # verification connection may create are cleaned up too).
+  #
+  # The removal is deliberately TOLERANT: `EvoGit.Store.Boot.stop/1` closes the
+  # repo, but on Windows the xqlite NIF can hold the file handle until the
+  # resource is garbage-collected, so an immediate `File.rm/1` fails with
+  # `:eperm` (POSIX unlinks open files, Windows does not). That made every
+  # `home_live_test` setup fail on Windows with "could not remove file
+  # ...sqlite.verify: permission denied". Retry after a GC + short pause, then
+  # ignore a persistent failure — these are per-run scratch files under the
+  # suite's own temp dir, so a leftover copy is harmless and must never fail the
+  # suite (the template is overwritten on the next build anyway).
   defp remove_database_files(path) do
-    Enum.each([path | Enum.map(@template_sidecars, &(path <> &1))], fn file ->
-      if File.exists?(file), do: File.rm!(file)
-    end)
+    Enum.each([path | Enum.map(@template_sidecars, &(path <> &1))], &remove_database_file/1)
+  end
+
+  defp remove_database_file(file) do
+    if File.exists?(file) do
+      Enum.reduce_while(1..3, :ok, fn _attempt, :ok ->
+        case File.rm(file) do
+          :ok ->
+            {:halt, :ok}
+
+          {:error, _reason} ->
+            :erlang.garbage_collect()
+            Process.sleep(25)
+            {:cont, :ok}
+        end
+      end)
+    else
+      :ok
+    end
   end
 
   # Killing a `EvoGit.Store` while offloaded read/write Tasks are still in
