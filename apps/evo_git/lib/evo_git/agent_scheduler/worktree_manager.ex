@@ -335,38 +335,16 @@ defmodule EvoGit.AgentScheduler.WorktreeManager do
 
   # --- Private Helpers ---
 
-  # Initializes the workers directory for a repo the first time it is
-  # requested after the app started. The destructive wipe (rm_rf the whole
-  # workers dir + orphaned branch cleanup + prune) is gated on a PERSISTENT
-  # marker in the app-owned ETS table `:evogit_worktree_repos`:
-  #
-  # - Marker present → the wipe already ran for this repo. This is the
-  #   WorktreeManager-only restart case: agents whose worktrees were created
-  #   before the crash are STILL RUNNING, so re-wiping would delete their live
-  #   worktrees and branches (the production crash cascade). Skip the wipe;
-  #   only ensure the workers dir exists (git worktree add needs the parent)
-  #   via the tolerant `WorktreeRetry.mkdir_p_retry/2`.
-  # - Marker absent → full wipe (no worktrees for this repo can exist yet —
-  #   either the app just started and no create has ever run, or the BEAM
-  #   restarted, in which case all agents are dead). Then record the marker.
-  # - Table missing entirely (`:ets.whereis` → `:undefined`, e.g. tests that
-  #   do not start the app) → treated as marker absent → full wipe, mirroring
-  #   the `:evogit_cancelling_tasks` defensive pattern.
-  #
-  # `primary?` scopes the DESTRUCTIVE steps to the primary repo: writable
-  # foreign repos may hold REAL task work (`evogit-agent-*` branches + live
-  # worktrees from previous runs), so their lazy init must never rm_rf the
-  # workers base nor delete orphaned agent branches. The non-destructive
-  # `Git.prune_worktrees` (admin metadata only), the loud workers-dir ensure,
-  # and the per-repo init marker run for BOTH primary and foreign repos —
-  # lazy init + the marker-gated skip path are still needed for foreign repos.
+  # Retain previous runs, discover legacy registered workers once per VM,
+  # and reuse the app-owned initialization marker across manager restarts.
   defp maybe_init_repo(state, repo_root, primary?) do
     worker_base = workers_dir(repo_root)
+    EvoGit.AgentScheduler.WorktreeRetention.discover(repo_root)
 
     if worktree_repo_initialized?(repo_root) do
       Logger.debug(
         "WorktreeManager: Repo #{repo_root} already initialized " <>
-          "(persistent marker) — skipping destructive wipe"
+          "(persistent marker) — preserving existing workers"
       )
 
       ensure_workers_dir(worker_base)

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Process-level setup tests with a local MCP fixture and a disposable Codex CLI."""
 import json
+import importlib.util
 import os
 from pathlib import Path
 import signal
@@ -8,6 +9,8 @@ import socket
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 SETUP = ROOT / "scripts/setup-codex.py"
@@ -27,7 +30,10 @@ if len(sys.argv)>1:
         failure=root/'fail-once'
         if failure.exists():failure.unlink();sys.exit(1)
         port=sys.argv[sys.argv.index('--port')+1]
-        p=subprocess.Popen([sys.executable,__file__],env={**os.environ,'FIXTURE_PORT':port},stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
+        child_env={**os.environ,'FIXTURE_PORT':port}
+        broken=root/'broken-once'
+        if broken.exists():broken.unlink();child_env['OLD_SERVER']='1'
+        p=subprocess.Popen([sys.executable,__file__],env=child_env,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
         (root/'pid').write_text(str(p.pid))
     sys.exit(0)
 class Handler(BaseHTTPRequestHandler):
@@ -103,6 +109,34 @@ class SetupTests(unittest.TestCase):
         upgraded = self.run_setup(extra=['--upgrade'])
         self.assertEqual(upgraded.returncode, 1, upgraded.stderr)
         self.assertEqual(json.loads(upgraded.stdout)['code'], 'active_tasks')
+        self.assertEqual((self.root/'starts').read_text().splitlines(), ['start'])
+
+    def test_incompatible_listening_candidate_is_stopped_and_rolled_back(self):
+        first = self.run_setup()
+        self.assertEqual(first.returncode, 2, first.stderr)
+        (self.root/'broken-once').touch()
+        self.env['GENESIS_VERSION'] = 'mcp-preview-0.7.0'
+        failed = self.run_setup(extra=['--upgrade'])
+        self.assertEqual(failed.returncode, 1, failed.stderr)
+        self.assertEqual(json.loads(failed.stdout)['code'], 'upgrade_failed')
+        self.env['GENESIS_VERSION'] = 'mcp-preview-0.6.0'
+        restored = self.run_setup()
+        self.assertEqual(restored.returncode, 2, restored.stderr)
+        self.assertFalse(json.loads(restored.stdout)['service_started'])
+        self.assertEqual((self.root/'starts').read_text().splitlines(), ['start','start','start'])
+
+    def test_backup_failure_leaves_previous_host_running(self):
+        first = self.run_setup()
+        self.assertEqual(first.returncode, 2, first.stderr)
+        spec = importlib.util.spec_from_file_location('setup_under_test', SETUP)
+        setup = importlib.util.module_from_spec(spec);spec.loader.exec_module(setup)
+        args = SimpleNamespace(config_dir=self.config, release_dir=self.root/'runtime')
+        url = f'http://127.0.0.1:{self.port}/mcp'
+        token = (self.config/'mcp-token').read_text().strip()
+        with patch.dict(os.environ,self.env), patch.object(setup.shutil,'copytree',side_effect=OSError('disk full')):
+            with self.assertRaises((OSError, setup.SetupError)):
+                setup.upgrade_owned(args,url,token)
+        self.assertEqual(setup.verify(url,token)['build']['release'], 'mcp-preview-0.6.0')
         self.assertEqual((self.root/'starts').read_text().splitlines(), ['start'])
 
     def test_failed_upgrade_restarts_the_previous_runtime_and_preserves_configuration(self):

@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import shutil
 import signal
+import socket
 import tempfile
 import subprocess
 import sys
@@ -132,19 +133,20 @@ def runtime_environment(args):
     return env
 
 
-def stop_owned(args, url, token, record):
+def stop_owned(args, url, token, record, *, require_idle=True):
     if record.get('url') != url or Path(record.get('release_dir', '')).resolve() != args.release_dir:
         raise SetupError('unmanaged_service', 'This endpoint has no matching managed installation record. Inspect and stop the previous host before reinstalling.')
     launcher = Path(record['launcher']).resolve()
     if not launcher.is_relative_to(args.release_dir):
         raise SetupError('unmanaged_service', 'The launcher is outside this managed installation.')
-    for state in ('pending','running','finalizing','cancelling'):
-        reply = connector.rpc(url, token, 'tools/call', {'name':'genesis_list_tasks', 'arguments':{'status':state,'limit':1}})['result']
-        tasks = reply.get('structuredContent', {})
-        if 'tasks' not in tasks or 'total' not in tasks:
-            raise SetupError('task_status_unavailable', 'Cannot confirm that the existing service is idle.')
-        if tasks['total'] or tasks['tasks']:
-            raise SetupError('active_tasks', 'Genesis has active tasks. Finish or stop them through MCP before upgrading.')
+    if require_idle:
+        for state in ('pending','running','finalizing','cancelling'):
+            reply = connector.rpc(url, token, 'tools/call', {'name':'genesis_list_tasks', 'arguments':{'status':state,'limit':1}})['result']
+            tasks = reply.get('structuredContent', {})
+            if 'tasks' not in tasks or 'total' not in tasks:
+                raise SetupError('task_status_unavailable', 'Cannot confirm that the existing service is idle.')
+            if tasks['total'] or tasks['tasks']:
+                raise SetupError('active_tasks', 'Genesis has active tasks. Finish or stop them through MCP before upgrading.')
     if IS_WINDOWS:
         pid = int(record.get('runtime_process', {}).get('pid', 0))
         if pid <= 0:
@@ -158,14 +160,19 @@ def stop_owned(args, url, token, record):
         run([launcher, 'stop'], runtime_environment(args))
     deadline = time.monotonic()+20
     while time.monotonic() < deadline:
-        try:
-            verify(url, token)
-        except URLError as error:
-            if refused(error):
-                return
-            raise
+        if not endpoint_listening(url):
+            return
         time.sleep(.1)
     raise SetupError('stop_failed', 'The previous Genesis endpoint is still running; no files were replaced.')
+
+
+def endpoint_listening(url):
+    address = urlsplit(url)
+    try:
+        with socket.create_connection((address.hostname, address.port or 80), timeout=1):
+            return True
+    except ConnectionRefusedError:
+        return False
 
 
 def upgrade_owned(args, url, token):
@@ -173,9 +180,15 @@ def upgrade_owned(args, url, token):
     if not record_path.is_file():
         raise SetupError('unmanaged_service', 'No runtime.json ownership record exists. Inspect and stop the previous host before reinstalling.')
     record = json.loads(record_path.read_text())
-    stop_owned(args, url, token, record)
-    backup = Path(tempfile.mkdtemp(prefix='.genesis-rollback-',dir=args.release_dir.parent))/'runtime'
-    shutil.copytree(args.release_dir, backup)
+    # Prepare the rollback copy while the previous host is still available.
+    backup_root = Path(tempfile.mkdtemp(prefix='.genesis-rollback-',dir=args.release_dir.parent))
+    backup = backup_root/'runtime'
+    try:
+        shutil.copytree(args.release_dir, backup)
+        stop_owned(args, url, token, record)
+    except (OSError, SetupError, ValueError, URLError, subprocess.SubprocessError):
+        shutil.rmtree(backup_root)
+        raise
     from types import SimpleNamespace
     next_args = SimpleNamespace(**vars(args))
     next_args.method = 'release'
@@ -185,14 +198,16 @@ def upgrade_owned(args, url, token):
         result['previous_installation'] = str(backup)
         return result
     except (SetupError, OSError, ValueError, URLError, subprocess.SubprocessError) as error:
-        # Stop only the new managed instance; don't replace an active runtime.
-        try:
-            verify(url, token)
-        except URLError as probe:
-            if not refused(probe):
-                raise
-        else:
-            stop_owned(args, url, token, json.loads(record_path.read_text()))
+        # A newly launched candidate may own the port but have a broken MCP
+        # endpoint. Ownership, rather than protocol health, identifies that host.
+        if endpoint_listening(url):
+            try:
+                verify(url, token)
+            except SetupError:
+                require_idle = False
+            else:
+                require_idle = True
+            stop_owned(args, url, token, json.loads(record_path.read_text()), require_idle=require_idle)
         if args.release_dir.exists():
             shutil.rmtree(args.release_dir)
         shutil.copytree(backup, args.release_dir)
@@ -204,6 +219,15 @@ def upgrade_owned(args, url, token):
             address=urlsplit(url)
             run([launcher,'start','--ip',address.hostname,'--port',str(address.port or 80),'--no-linger'],env)
         connector.write_private_json(record_path, record)
+        deadline = time.monotonic()+30
+        while True:
+            try:
+                verify(url, token)
+                break
+            except URLError as probe:
+                if not refused(probe) or time.monotonic() >= deadline:
+                    raise
+                time.sleep(.25)
         raise SetupError('upgrade_failed', f'Upgrade failed; restored the previous installation. {error}') from error
 
 

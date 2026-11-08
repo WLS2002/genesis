@@ -68,6 +68,8 @@ defmodule EvoGit.AgentScheduler.WorktreeRetention do
   def forget(repo, path), do: File.rm(descriptor(repo, path))
 
   def list(repo, task_id \\ nil) do
+    discover(repo)
+
     repo
     |> Path.join(".genesis/recovery/*.json")
     |> Path.wildcard()
@@ -83,6 +85,58 @@ defmodule EvoGit.AgentScheduler.WorktreeRetention do
       end
     end)
     |> Enum.take(100)
+  end
+
+  @doc "Discovers pre-descriptor Genesis workers once per repository and VM."
+  def discover(repo) do
+    table = :evogit_worktree_repos
+    key = {:recovery_discovered, Path.expand(repo)}
+    known = :ets.whereis(table) != :undefined and :ets.member(table, key)
+
+    unless known do
+      with {:ok, output} <- Git.run(["worktree", "list", "--porcelain", "-z"], repo) do
+        output
+        |> String.split("\0\0", trim: true)
+        |> Enum.each(fn record ->
+          fields =
+            record
+            |> String.split("\0", trim: true)
+            |> Map.new(fn field ->
+              case String.split(field, " ", parts: 2) do
+                [key, value] -> {key, value}
+                [key] -> {key, true}
+              end
+            end)
+
+          path = fields["worktree"]
+          branch = fields["branch"]
+
+          if is_binary(path) and is_binary(branch) and
+               String.starts_with?(branch, "refs/heads/evogit-agent-") and
+               worker_path?(repo, path) and not File.exists?(descriptor(repo, path)) do
+            branch = String.replace_prefix(branch, "refs/heads/", "")
+
+            case disposition(path, repo, branch) do
+              {:retain, reason} -> retain(repo, path, branch, reason)
+              :discard -> :ok
+            end
+          end
+        end)
+
+        if :ets.whereis(table) != :undefined, do: :ets.insert(table, {key, true})
+      end
+    end
+
+    :ok
+  end
+
+  defp worker_path?(repo, path) do
+    root = Path.expand(Path.join(repo, ".genesis/workers")) <> "/"
+    path = Path.expand(path)
+
+    if EvoGit.Platform.os() == :windows,
+      do: String.starts_with?(String.downcase(path), String.downcase(root)),
+      else: String.starts_with?(path, root)
   end
 
   defp branch_disposition(repo, branch) do

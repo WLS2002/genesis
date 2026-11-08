@@ -46,4 +46,19 @@ defmodule EvoGit.AgentScheduler.WorktreeRetentionTest do
     File.mkdir_p!(other)
     assert {:retain, "unrecognized_worktree"} = WorktreeRetention.disposition(other, root, branch)
   end
+
+  test "discovers registered legacy workers without inventing task ownership", %{
+    root: root,
+    wt: wt
+  } do
+    File.write!(Path.join(wt, "legacy.txt"), "unfinished work")
+    assert {:ok, status} = EvoGit.TaskControl.check(%{"path" => root})
+    assert [%{"path" => ^wt} = entry] = status.recoverable_work
+    assert entry["retained"]
+    assert is_nil(entry["task_id"])
+    assert File.read!(Path.join(wt, "legacy.txt")) == "unfinished work"
+    assert WorktreeRetention.list(root, "unrelated-task") == []
+    assert {:ok, second} = EvoGit.TaskControl.check(%{"path" => root})
+    assert second.recoverable_work == status.recoverable_work
+  end
 end
