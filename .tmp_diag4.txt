@@ -1,0 +1,75 @@
+﻿
+> apps\evo_git\lib\evo_git\agent\tools\web_fetch.ex:147:  def schema do
+  apps\evo_git\lib\evo_git\agent\tools\web_fetch.ex:148:    ReqLLM.tool(
+  apps\evo_git\lib\evo_git\agent\tools\web_fetch.ex:149:      name: @tool_name,
+  apps\evo_git\lib\evo_git\agent\tools\web_fetch.ex:150:      description:
+  apps\evo_git\lib\evo_git\agent\tools\web_fetch.ex:151:        "Fetch one web page over HTTP(S) and return it as reada
+ble Markdown " <>
+  apps\evo_git\lib\evo_git\agent\tools\web_fetch.ex:152:          "(HTML is converted to Markdown; plain text, Markdown
+, JSON, XML and CSV pass " <>
+  apps\evo_git\lib\evo_git\agent\tools\web_fetch.ex:153:          "through verbatim; other binary payloads are reported
+ as omitted). " <>
+  apps\evo_git\lib\evo_git\agent\tools\web_fetch.ex:154:          "Use it after web_search when you need the actual pag
+e content. " <>
+  apps\evo_git\lib\evo_git\agent\tools\web_fetch.ex:155:          "One GET, no JavaScript rendering, no cookies or logi
+ns. " <>
+  apps\evo_git\lib\evo_git\agent\tools\web_fetch.ex:156:          "At most 5 redirects are followed, and only within th
+e same host and scheme. " <>
+  apps\evo_git\lib\evo_git\agent\tools\web_fetch.ex:157:          "Local, loopback, private-network and cloud-metadata 
+hosts are refused.",
+  apps\evo_git\lib\evo_git\agent\tools\web_fetch.ex:158:      parameter_schema: %{
+  apps\evo_git\lib\evo_git\agent\tools\web_fetch.ex:159:        "type" => "object",
+  apps\evo_git\lib\evo_git\agent\tools\web_fetch.ex:160:        "properties" => %{
+  apps\evo_git\lib\evo_git\agent\tools\web_fetch.ex:161:          "url" => %{
+
+
+
+
+> apps\evo_git\lib\evo_git\agent\tools.ex:537:  def default_timeout_ms(tool_name) do
+  apps\evo_git\lib\evo_git\agent\tools.ex:538:    case ToolNames.normalize(tool_name) do
+  apps\evo_git\lib\evo_git\agent\tools.ex:539:      @shell_tool_name -> @shell_tool_default_timeout_ms
+  apps\evo_git\lib\evo_git\agent\tools.ex:540:      "job_output" -> job_output_default_timeout_ms()
+  apps\evo_git\lib\evo_git\agent\tools.ex:541:      "elixir_eval" -> 30_000
+  apps\evo_git\lib\evo_git\agent\tools.ex:542:      _other -> nil
+  apps\evo_git\lib\evo_git\agent\tools.ex:543:    end
+  apps\evo_git\lib\evo_git\agent\tools.ex:544:  end
+  apps\evo_git\lib\evo_git\agent\tools.ex:545:
+  apps\evo_git\lib\evo_git\agent\tools.ex:546:  # `job_output`'s dispatch ceiling, computed AT CALL TIME (never an attr
+ibute):
+  apps\evo_git\lib\evo_git\agent\tools.ex:547:  # the wait cap the tool advertises plus the dispatcher headroom it was 
+derived
+
+
+
+
+> apps\evo_git\lib\evo_git\agent\tools.ex:330:  defp dispatch_tool_call("report_progress", args, _repo_path, _repo_root
+, _node_path) do
+  apps\evo_git\lib\evo_git\agent\tools.ex:331:    EvoGit.Agent.Tools.ReportProgress.execute(args)
+  apps\evo_git\lib\evo_git\agent\tools.ex:332:  end
+  apps\evo_git\lib\evo_git\agent\tools.ex:333:
+> apps\evo_git\lib\evo_git\agent\tools.ex:334:  defp dispatch_tool_call("elixir_eval", args, repo_path, repo_root, _nod
+e_path) do
+  apps\evo_git\lib\evo_git\agent\tools.ex:335:    ElixirEval.execute(args, repo_path, repo_root)
+  apps\evo_git\lib\evo_git\agent\tools.ex:336:  end
+  apps\evo_git\lib\evo_git\agent\tools.ex:337:
+> apps\evo_git\lib\evo_git\agent\tools.ex:338:  defp dispatch_tool_call(name, args, repo_path, repo_root, node_path) do
+  apps\evo_git\lib\evo_git\agent\tools.ex:339:    maybe_block_repo_less(name, args, repo_path, repo_root, node_path)
+  apps\evo_git\lib\evo_git\agent\tools.ex:340:  end
+  apps\evo_git\lib\evo_git\agent\tools.ex:341:
+  apps\evo_git\lib\evo_git\agent\tools.ex:342:  # Tool-name aliasing lives ENTIRELY in `EvoGit.Agent.ToolNames` (the al
+ias
+  apps\evo_git\lib\evo_git\agent\tools.ex:343:  # spine): `normalize/1` maps every accepted spelling — `Read`/`read`,
+  apps\evo_git\lib\evo_git\agent\tools.ex:344:  # `Write`/`write`, `Edit`/`edit`, `Bash`/`bash`/`shell`/… , `Grep`/`gre
+p`/
+  apps\evo_git\lib\evo_git\agent\tools.ex:345:  # `ripgrep`, `WebSearch`/`web_search`, `Task`/`subagent` — onto the int
+ernal
+  apps\evo_git\lib\evo_git\agent\tools.ex:346:  # dispatch key, and returns unknown names UNCHANGED (custom tools + dyn
+amic
+  apps\evo_git\lib\evo_git\agent\tools.ex:347:  # skills rely on that passthrough).
+  apps\evo_git\lib\evo_git\agent\tools.ex:348:  #
+  apps\evo_git\lib\evo_git\agent\tools.ex:349:  # LOAD-BEARING ORDERING: normalisation MUST happen at the TOP of `execu
+te/5`,
+  apps\evo_git\lib\evo_git\agent\tools.ex:350:  # BEFORE the two write guards (`maybe_block_repo_less/5`,
+
+
+

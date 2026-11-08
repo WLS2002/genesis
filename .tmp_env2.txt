@@ -1,0 +1,16 @@
+﻿beforeExtra=-noshell -elixir_root "C:\Users\cvgcv\AppData\Local\Genesis\source-build\releases\0.14.0\..\lib" -pa "C:\Users\cvgcv\AppData\Local\Genesis\source-build\releases\0.14.0\..\lib\elixir\ebin" -s elixir start_cli  -mode embedded
+ERTS_BIN=C:\Users\cvgcv\AppData\Local\Genesis\source-build\releases\0.14.0\\..\..\erts-17.1.1\bin\
+parsErlang= -setcookie "5MHFXD6SSIS5ZMER45ZKHQB3M5AHCH3RDH5NH7AWZ2SIMJALAJJA====" -sname "genesis_server" -config "C:\Users\cvgcv\AppData\Local\Genesis\source-build\releases\0.14.0\sys" -boot "C:\Users\cvgcv\AppData\Local\Genesis\source-build\releases\0.14.0\start" -boot_var "RELEASE_LIB" "C:\Users\cvgcv\AppData\Local\Genesis\source-build\lib" -args_file "C:\Users\cvgcv\AppData\Local\Genesis\source-build\releases\0.14.0\vm.args"
+REL_VSN_DIR=C:\Users\cvgcv\AppData\Local\Genesis\source-build\releases\0.14.0
+RELEASE_REMOTE_VM_ARGS=C:\Users\cvgcv\AppData\Local\Genesis\source-build\releases\0.14.0\remote.vm.args
+RELEASE_SYS_CONFIG=C:\Users\cvgcv\AppData\Local\Genesis\source-build\releases\0.14.0\sys
+RELEASE_VM_ARGS=C:\Users\cvgcv\AppData\Local\Genesis\source-build\releases\0.14.0\vm.args
+RELEASE_VSN=0.14.0
+SCRIPT_PATH=C:\Users\cvgcv\AppData\Local\Genesis\source-build\releases\0.14.0\
+---USER---
+Path=C:\Users\cvgcv\.local\erl\bin;C:\Users\cvgcv\.local\elixir\bin;C:\Users\cvgcv\anaconda3\condabin;C:\Users\cvgcv\AppData\Local\Microsoft\WindowsApps;C:\Users\cvgcv\AppData\Local\Programs\Microsoft VS Code\bin;C:\Users\cvgcv\AppData\Local\Programs\cursor\resources\app\bin;C:\Users\cvgcv\AppData\Roaming\npm;C:\Users\cvgcv\AppData\Local\Microsoft\WinGet\Packages\Game1024.OpenSpeedy_Microsoft.Winget.Source_8wekyb3d8bbwe;C:\texlive\2025\bin\windows;C:\Users\cvgcv\.local\bin
+TEMP=C:\Users\cvgcv\AppData\Local\Temp
+OneDrive=C:\Users\cvgcv\OneDrive
+OneDriveConsumer=C:\Users\cvgcv\OneDrive
+TMP=C:\Users\cvgcv\AppData\Local\Temp
+SHADOWBOT_CULTURE=Zh_CN
