@@ -25,7 +25,7 @@ No page or unit suite writes the config dir BEAM-globally: it is isolated per pr
 - `./home_live_render_test.exs` → six `async: true` pure page-template contracts via `render_component(&HomeLive.render/1, assigns)`, covering empty/restored conversations, actionable suggestions, composer accessibility/keyboard wiring, Send/Stop states, and local-source gating without a `/help` mount or global ChatHistory writes.
 - `./approval_card_render_test.exs` → seven `async: true` pure ApprovalCard render contracts covering exact evaluator code/target, write versus sudo authority and warnings, request-id-only decisions, busy controls, and legacy command presentation.
 - `./home_live/approval_workflow_test.exs` → 26 `async: true` helper contracts for source-node ownership independent of evaluator targets, recovery tombstones, responding-card retention across authoritative snapshots, acknowledgement and retry handling, monotonic scope guards and ephemeral ChatState exclusion; seam ownership and isolation are documented in `./home_live/CONTEXT.md`.
-- `./home_live_test.exs` (81 tests, `async: false`) → Genesis Assistant page (`GET /help`, `:reflect` self-reflective agent), evaluator/legacy approval presentation and asynchronous recovery/response integration; see "Home chat suite".
+- `./home_live_test.exs` (86 tests, `async: false`) → Genesis Assistant page (`GET /help`, `:reflect` self-reflective agent), evaluator/legacy approval presentation and asynchronous recovery/response integration; see "Home chat suite".
 - `./home_live/` → `assistant_message_test.exs` (9 — mini task-card message: text, status badge, collapsible thought process, `AgentStream.extract_failed_message/1`), `chat_state_test.exs` (7 — `ChatState.build/1` / `restore/1` / `normalize_model_id/1`), `messages_test.exs` (6 — `assistant_text/1` / `message_text/1` / `to_entries/1`), `transcript_test.exs` (5 — `Transcript.normalize/1`).
 - `./welcome_live_test.exs` (898 lines, 26: 25 async + 1 sync `TaskBroadcast`) / `./welcome_complete_live_test.exs` (149 lines, 3: 2 async + 1 sync `TaskBroadcast`) → onboarding pages.
 - `./platform_info_test.exs` (10, `async: true`) → pure `EvoDashWeb.PlatformInfo` platform/nix gating.
@@ -181,7 +181,8 @@ Two production behaviours the tests work around: the commits-view right-hand det
 
 ## Notes for Agents — Home chat suite (`home_live_test.exs`)
 
-The page-alive/name assertions use `page_heading/1` to pin the `h1` to "Genesis Assistant", not a loose name match that could be satisfied by an assistant entry or composer label.
+The page-alive/name assertions use `page_heading/1` to pin the `h1` to "Assistant", not a loose name match that could be satisfied by an assistant entry or composer label.
+The chat surface renders only once a workspace is selected: tests that assert the greeting, composer or transcript call `select_workspace/1` (the real `select_workspace` event) first, and every submitted objective carries the `## Workspace` block, so send-flow tests compare against `workspace_objective/1`.
 The async `home_live_render_test.exs` fixture supplies `approval_error: nil` for the page's approval-state branch and pins the same assistant name in the heading, composer accessible label/placeholder and empty-chat disclaimer.
 
 Chat state is SEEDED (`seed_chat_state/2`, `seed_running_chat/1`, synthetic `{:task_updated, …}` events) and terminal paths are driven with `finalize_failed/2` / `insert_task_fixture!` — NOT by submitting `send_message` to start a real `:reflect` task.

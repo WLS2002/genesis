@@ -4956,7 +4956,7 @@ defmodule EvoDashWeb.ProjectsLiveSyncTest do
         |> Floki.text()
         |> String.trim()
 
-      assert heading == "Genesis Assistant"
+      assert heading == "Assistant"
       assert html =~ ~s(id="chat-form")
     end
   end
