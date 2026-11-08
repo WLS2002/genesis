@@ -424,6 +424,12 @@ defmodule EvoDashWeb.HomeLiveTest do
     html
   end
 
+  # The submitted objective always carries the workspace block (see
+  # `do_send_chat/2`), so a user message `text` becomes this exact string.
+  defp workspace_objective(text, path \\ @test_workspace) do
+    "## Workspace\npath: " <> path <> "\n\nNew message: " <> text
+  end
+
   describe "render" do
     test "renders the idle chat page", %{conn: conn} do
       {:ok, view, _html} = live(conn, "/help")
@@ -1959,6 +1965,7 @@ defmodule EvoDashWeb.HomeLiveTest do
     test "typed submit locks a canonical model_spec and the resolved slider effort", %{conn: conn} do
       write_provider_profile_config()
       {:ok, view, _html} = live(conn, "/help")
+      select_workspace(view)
       render_change(view, "select_reasoning_effort", %{"reasoning_effort" => "2"})
       assert assigns(view).model_spec == work_spec("high")
 
@@ -1971,7 +1978,7 @@ defmodule EvoDashWeb.HomeLiveTest do
       task = only_reflect_task()
       assert_task_selection(task, work_spec("high"))
       assert opt(task, :mode) == "reflect"
-      assert opt(task, :objective) == "hello"
+      assert opt(task, :objective) == workspace_objective("hello")
       refute inspect(task.opts) =~ "server-only-test-secret"
       cleanup_task_on_exit(task.id)
     end
@@ -1979,6 +1986,7 @@ defmodule EvoDashWeb.HomeLiveTest do
     test "explicit Auto after a pin survives remount and submits no model override", %{conn: conn} do
       write_provider_profile_config()
       {:ok, view, _html} = live(conn, "/help")
+      select_workspace(view)
       assert assigns(view).model_spec == work_spec()
       render_change(view, "select_provider_profile", %{"provider_profile_id" => ""})
       assert assigns(view).model_spec == %{}
@@ -1999,7 +2007,7 @@ defmodule EvoDashWeb.HomeLiveTest do
       task = only_reflect_task()
       assert_auto_task(task)
       assert opt(task, :mode) == "reflect"
-      assert opt(task, :objective) == "auto please"
+      assert opt(task, :objective) == workspace_objective("auto please")
       cleanup_task_on_exit(task.id)
     end
 
@@ -2064,7 +2072,10 @@ defmodule EvoDashWeb.HomeLiveTest do
         chat_draft: "keep this draft"
       })
 
-      {:ok, view, html} = live(conn, "/help")
+      {:ok, view, _html} = live(conn, "/help")
+      # Select the workspace FIRST so the disabled submit button below is
+      # attributable to the malformed selection, not to the missing workspace.
+      html = select_workspace(view)
       assert assigns(view).model_selection_error == :invalid_model_spec
       assert disabled?(html, ~s(#chat-form button[type="submit"]))
       html = render_submit(view, "send_message", %{"message" => "keep this draft"})
@@ -2111,6 +2122,7 @@ defmodule EvoDashWeb.HomeLiveTest do
     test "suggestion-chip send locks the same canonical selection as typed submit", %{conn: conn} do
       write_provider_profile_config()
       {:ok, view, _html} = live(conn, "/help")
+      select_workspace(view)
 
       send_and_await_terminal(fn ->
         view |> element(~s(button[phx-value-message="Show my running tasks"])) |> render_click()
@@ -2119,13 +2131,14 @@ defmodule EvoDashWeb.HomeLiveTest do
       task = only_reflect_task()
       assert_task_selection(task, work_spec())
       assert opt(task, :mode) == "reflect"
-      assert opt(task, :objective) == "Show my running tasks"
+      assert opt(task, :objective) == workspace_objective("Show my running tasks")
       cleanup_task_on_exit(task.id)
     end
 
     test "suggestion-chip send on explicit Auto omits all model overrides", %{conn: conn} do
       write_provider_profile_config()
       {:ok, view, _html} = live(conn, "/help")
+      select_workspace(view)
       render_change(view, "select_provider_profile", %{"provider_profile_id" => ""})
 
       send_and_await_terminal(fn ->
@@ -2135,13 +2148,14 @@ defmodule EvoDashWeb.HomeLiveTest do
       task = only_reflect_task()
       assert_auto_task(task)
       assert opt(task, :mode) == "reflect"
-      assert opt(task, :objective) == "Start a task for me"
+      assert opt(task, :objective) == workspace_objective("Start a task for me")
       cleanup_task_on_exit(task.id)
     end
 
     test "new chat retains its same-node canonical pin and locks the next send", %{conn: conn} do
       write_provider_profile_config()
       {:ok, view, _html} = live(conn, "/help")
+      select_workspace(view)
       render_change(view, "select_reasoning_effort", %{"reasoning_effort" => "2"})
       old_chat_id = assigns(view).chat_id
       html = render_click(view, "new_chat", %{})
@@ -2158,7 +2172,7 @@ defmodule EvoDashWeb.HomeLiveTest do
       task = only_reflect_task()
       assert_task_selection(task, work_spec("high"))
       assert opt(task, :mode) == "reflect"
-      assert opt(task, :objective) == "after new chat"
+      assert opt(task, :objective) == workspace_objective("after new chat")
       cleanup_task_on_exit(task.id)
     end
   end
@@ -3283,7 +3297,7 @@ defmodule EvoDashWeb.HomeLiveTest do
       html = render(view)
       refute html =~ "The task failed."
       # Patching back to "/help" (no ?node=) switches to local → a NEW chat.
-      html = render_patch(view, "/help")
+      render_patch(view, "/help")
       assert assigns(view).current_node == node()
       # Workspace selection is node-scoped, so the local node needs its own
       # selection before the post-reset empty state can render.
