@@ -87,14 +87,12 @@ defmodule EvoDashWeb.Layouts do
           <.icon name="hero-bars-3" class="size-5" />
         </button>
       </div>
-
       <!-- Mobile overlay (hidden by default, JS-controlled) -->
       <div
         id="sidebar-overlay"
         class="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm opacity-0 pointer-events-none transition-opacity duration-300 lg:hidden"
       >
       </div>
-
       <!-- Sidebar
         NOTE: `overflow-visible!` (important) is deliberate defense-in-depth so
         the sidebar's overflowing <details> dropdown panels (SSH node selector
@@ -124,20 +122,19 @@ defmodule EvoDashWeb.Layouts do
               src={~p"/images/logo.svg"}
               class="h-6 w-auto block dark:hidden shrink-0"
               alt={gettext("EvoX Genesis")}
-            />
-            <%!-- zh_CN: EvoX Genesis → "天演 · 启元" (天演 · 啟元) --%>
+            /> <%!-- zh_CN: EvoX Genesis → "天演 · 启元" (天演 · 啟元) --%>
             <img
               src={~p"/images/logo-alt.svg"}
               class="h-6 w-auto hidden dark:block shrink-0"
               alt={gettext("EvoX Genesis")}
             />
             <span class="text-base font-semibold tracking-tight text-base-content truncate sidebar-label">
-              <%!-- zh_CN: EvoX Genesis → "天演 · 启元" (天演 · 啟元) --%>
-              {gettext("EvoX Genesis")}
+              <%!-- zh_CN: EvoX Genesis → "天演 · 启元" (天演 · 啟元) --%> {gettext(
+                "EvoX Genesis"
+              )}
             </span>
           </.link>
         </div>
-
         <!-- Navigation Links -->
         <%= if !@simple_nav do %>
           <nav class="flex-1 px-2 py-3 space-y-0.5 overflow-y-auto">
@@ -173,7 +170,6 @@ defmodule EvoDashWeb.Layouts do
               icon="hero-server-stack"
               notification={update_status_notification(@update_status)}
             >{gettext("System")}</.sidebar_nav_link>
-
             <!-- Task Indicators Section -->
             <div :if={@running_tasks != [] or @pending_tasks != []} class="pt-5 mt-4">
               <div class="px-3 mb-3 mt-1">
@@ -181,13 +177,13 @@ defmodule EvoDashWeb.Layouts do
                   {gettext("Active Tasks")}
                 </span>
               </div>
+
               <div class="space-y-1">
                 <%= for {project_name, tasks} <- group_tasks_by_project(@running_tasks, @pending_tasks) do %>
                   <!-- Project group header -->
                   <div class="px-3 pt-2 pb-1 first:pt-0">
                     <span class="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-base-content/70 sidebar-label">
-                      <.icon name="hero-folder" class="w-3 h-3 shrink-0" />
-                      {project_name}
+                      <.icon name="hero-folder" class="w-3 h-3 shrink-0" /> {project_name}
                     </span>
                   </div>
                   <!-- Tasks in this group -->
@@ -215,6 +211,7 @@ defmodule EvoDashWeb.Layouts do
                         <span class="block truncate group-hover:text-base-content transition-colors">
                           {task_label(task)}
                         </span>
+
                         <span class="block text-xs text-base-content/60 mt-0.5">
                           <%= if is_running do %>
                             {format_elapsed(task.started_at)}
@@ -229,7 +226,6 @@ defmodule EvoDashWeb.Layouts do
               </div>
             </div>
           </nav>
-
           <!-- Bottom section: Node selector + Language + Theme + Collapse -->
           <div class="px-3 py-3 border-t border-base-300 shrink-0">
             <div data-sidebar-bottom-bar class="flex items-center justify-between gap-1">
@@ -243,9 +239,9 @@ defmodule EvoDashWeb.Layouts do
                   drop_up={true}
                 />
               </div>
+
               <div data-sidebar-bottom-group class="flex items-center gap-1">
-                <.language_selector drop_up={true} />
-                <.theme_toggle_compact drop_up={true} />
+                <.language_selector drop_up={true} /> <.theme_toggle_compact drop_up={true} />
                 <button
                   id="sidebar-collapse-toggle"
                   class="p-1.5 rounded-lg text-base-content/70 hover:text-base-content hover:bg-base-300 transition-colors hidden lg:flex focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-standalone"
@@ -258,7 +254,6 @@ defmodule EvoDashWeb.Layouts do
           </div>
         <% end %>
       </aside>
-
       <!-- Main Content Area -->
       <div id="main-scroll" class="flex-1 flex flex-col overflow-auto min-w-0 z-0 bg-base-100">
         <%!-- The DesktopQuit hook wrapper listens for the Tauri shell's
@@ -279,6 +274,7 @@ defmodule EvoDashWeb.Layouts do
             {render_slot(@inner_block)}
           </main>
         </div>
+
         <%!-- The UpdateStatus hook wrapper bridges the Tauri updater to the
              server (startup + periodic checks, phx:update_* event listeners).
              Hooks only mount on elements inside the LiveView root DOM, and
@@ -293,7 +289,6 @@ defmodule EvoDashWeb.Layouts do
              navigation. --%>
         <div id="guide-hook" phx-hook="Guide" />
       </div>
-
       <!-- Config Warning Banner -->
       <%= if @config_status && not @config_status.ok? do %>
         <div class="fixed bottom-4 right-4 z-40 w-[calc(100%-2rem)] max-w-sm animate-fade-in-up">
@@ -305,16 +300,19 @@ defmodule EvoDashWeb.Layouts do
               />
               <div class="flex-1 min-w-0">
                 <p class="font-semibold text-sm">{gettext("Missing Configuration")}</p>
+
                 <ul class="mt-1 space-y-0.5">
                   <%= for warning <- @config_status.warnings do %>
                     <li class="text-xs break-words">{warning}</li>
                   <% end %>
                 </ul>
+
                 <.link
                   navigate={with_node_param(~p"/settings", @current_node_id)}
                   class="text-xs font-medium underline mt-2 inline-block hover:opacity-80"
                 >{gettext("Configure now →")}</.link>
               </div>
+
               <button
                 class="p-1 rounded-md hover:bg-warning/20 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-standalone"
                 aria-label={gettext("Close")}
@@ -326,7 +324,6 @@ defmodule EvoDashWeb.Layouts do
           </div>
         </div>
       <% end %>
-
       <!-- Desktop tray quit confirm dialog — driven by the DesktopQuit
            on-mount hook (EvoDashWeb.LiveHooks.DesktopQuit) from the Tauri
            shell's tray "Quit Genesis" item. Rendered in the app layout so it
@@ -335,6 +332,7 @@ defmodule EvoDashWeb.Layouts do
         <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div class="fixed inset-0 bg-black/50 backdrop-blur-sm" phx-click="desktop_quit_cancelled">
           </div>
+
           <div class="relative bg-base-100 rounded-lg shadow-2xl border border-base-300 max-w-lg w-full p-6 md:p-8">
             <div class="flex items-center gap-3 mb-4">
               <.icon name="hero-exclamation-triangle" class="size-5 text-error" />
@@ -346,6 +344,7 @@ defmodule EvoDashWeb.Layouts do
                 "This will gracefully shut down the Erlang VM. All applications will be stopped in order."
               )}
             </p>
+
             <p class="text-sm text-error/80 font-semibold mb-5 leading-relaxed">
               {gettext(
                 "Running tasks will be interrupted and may lose progress. The VM will stop and must be restarted again from the desktop app. This cannot be undone."
@@ -360,20 +359,19 @@ defmodule EvoDashWeb.Layouts do
               >
                 {gettext("Cancel")}
               </button>
+
               <button
                 type="button"
                 id="desktop-quit-confirm-btn"
                 class="btn btn-error rounded-md px-6 gap-2"
                 phx-hook="DesktopQuitConfirm"
               >
-                <.icon name="hero-power" class="size-4.5" />
-                {gettext("Quit")}
+                <.icon name="hero-power" class="size-4.5" /> {gettext("Quit")}
               </button>
             </div>
           </div>
         </div>
       <% end %>
-
       <!-- Floating "Genesis Guide" panel — driven by the Guide on-mount hook
            (EvoDashWeb.LiveHooks.Guide) from the core guide_user tool
            broadcasts of a running reflect task. Rendered in the shared app
@@ -388,6 +386,7 @@ defmodule EvoDashWeb.Layouts do
             <.icon name="hero-sparkles" class="w-4 h-4 text-primary-standalone shrink-0" />
             <%!-- 自省智能体向导 — 由运行中的 reflect 任务推送的引导提示 --%>
             <h3 class="text-sm font-semibold flex-1 min-w-0">{gettext("Genesis Guide")}</h3>
+
             <%= if @guide.dismissible do %>
               <%!-- 关闭向导提示 --%>
               <button
@@ -400,21 +399,21 @@ defmodule EvoDashWeb.Layouts do
               </button>
             <% end %>
           </div>
+
           <p class="text-sm text-base-content/70 leading-relaxed">{@guide.message}</p>
+
           <%= if is_binary(@guide.page) do %>
             <div class="mt-3">
               <.link
                 navigate={with_node_param(@guide.page, @current_node_id)}
                 class="btn btn-primary btn-sm"
               >
-                <%!-- 跳转到引导指向的页面 --%>
-                {gettext("Go")}
+                <%!-- 跳转到引导指向的页面 --%> {gettext("Go")}
               </.link>
             </div>
           <% end %>
         </div>
       <% end %>
-
       <.flash_group flash={@flash} />
     </div>
     """
@@ -517,8 +516,7 @@ defmodule EvoDashWeb.Layouts do
         "size-5 transition-colors " <>
         if(@current, do: "text-primary-standalone", else: "text-base-content/60")
       }
-      />
-      <span class="sidebar-label">{render_slot(@inner_block)}</span>
+      /> <span class="sidebar-label">{render_slot(@inner_block)}</span>
       <%= if @notification do %>
         <span
           class={["ml-auto w-2.5 h-2.5 rounded-full shrink-0", update_notification_dot(@notification)]}
@@ -559,6 +557,7 @@ defmodule EvoDashWeb.Layouts do
       >
         <.icon name="hero-swatch" class="size-4" />
       </summary>
+
       <div class={[
         "dropdown-content",
         (@drop_up && "mb-2") || "mt-2",
@@ -573,21 +572,21 @@ defmodule EvoDashWeb.Layouts do
             <.icon name="hero-computer-desktop-micro" class="w-4 h-4" />
             <span>{gettext("System")}</span>
           </button>
+
           <button
             class="flex items-center gap-3 w-full px-3 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer hover:bg-base-200 text-base-content/80"
             phx-click={JS.dispatch("phx:set-theme")}
             data-phx-theme="light"
           >
-            <.icon name="hero-sun-micro" class="w-4 h-4" />
-            <span>{gettext("Light")}</span>
+            <.icon name="hero-sun-micro" class="w-4 h-4" /> <span>{gettext("Light")}</span>
           </button>
+
           <button
             class="flex items-center gap-3 w-full px-3 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer hover:bg-base-200 text-base-content/80"
             phx-click={JS.dispatch("phx:set-theme")}
             data-phx-theme="dark"
           >
-            <.icon name="hero-moon-micro" class="w-4 h-4" />
-            <span>{gettext("Dark")}</span>
+            <.icon name="hero-moon-micro" class="w-4 h-4" /> <span>{gettext("Dark")}</span>
           </button>
         </div>
       </div>
@@ -622,11 +621,8 @@ defmodule EvoDashWeb.Layouts do
       aria-live="polite"
       class="fixed top-4 right-4 z-[60] flex flex-col gap-2 w-80 sm:w-96 pointer-events-none"
     >
-      <.flash kind={:info} flash={@flash} />
-      <.flash kind={:success} flash={@flash} />
-      <.flash kind={:error} flash={@flash} />
-      <.flash kind={:warning} flash={@flash} />
-
+      <.flash kind={:info} flash={@flash} /> <.flash kind={:success} flash={@flash} />
+      <.flash kind={:error} flash={@flash} /> <.flash kind={:warning} flash={@flash} />
       <.flash
         id="client-error"
         kind={:error}
@@ -664,7 +660,6 @@ defmodule EvoDashWeb.Layouts do
       <div class="absolute inset-y-1 left-1 w-9 rounded-full bg-base-100 shadow transition-transform duration-300 ease-out z-0
         [[data-theme-mode=light]_&]:translate-x-9
         [[data-theme-mode=dark]_&]:translate-x-[4.5rem]" />
-
       <button
         class="relative z-10 p-2 w-9 h-8 flex items-center justify-center rounded-full text-base-content/70 hover:text-base-content transition-colors"
         phx-click={JS.dispatch("phx:set-theme")}
@@ -739,6 +734,7 @@ defmodule EvoDashWeb.Layouts do
       >
         <.icon name="hero-language" class="size-5" />
       </summary>
+
       <div class={[
         "dropdown-content",
         (@drop_up && "mb-2") || "mt-2",

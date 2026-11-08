@@ -202,6 +202,7 @@ defmodule EvoDashWeb.HomeLiveRenderTest do
              ) == []
     end
   end
+
   test "no workspace disables the composer and shows workspace guidance" do
     dom = page(workspace: nil)
 
@@ -228,4 +229,5 @@ defmodule EvoDashWeb.HomeLiveRenderTest do
 
     assert attr(dom, "#assistant-workspace-form a", "href") == ["/projects?node=workstation"]
     assert text(dom, "#assistant-workspace-form a") == "Open or create project"
-  endend
+  end
+end

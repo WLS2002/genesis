@@ -3379,6 +3379,7 @@ defmodule EvoDashWeb.HomeLiveTest.ConnectionManager do
 
   @impl true
   def handle_call(:status, _from, status), do: {:reply, status, status}
+
   describe "assistant entry routes" do
     test "GET / renders the assistant page", %{conn: conn} do
       {:ok, _view, html} = live(conn, "/")
@@ -3393,4 +3394,5 @@ defmodule EvoDashWeb.HomeLiveTest.ConnectionManager do
 
       assert html =~ "chat-form"
     end
-  endend
+  end
+end

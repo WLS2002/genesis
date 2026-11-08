@@ -27,7 +27,6 @@ defmodule EvoDashWeb.Router do
     live("/", HomeLive, :index)
     live("/assistant", HomeLive, :index)
     live("/help", HomeLive, :index)
-    live("/help", HomeLive, :index)
     live("/projects", ProjectsLive, :index)
     live("/welcome", WelcomeLive, :index)
     live("/welcome/complete", WelcomeCompleteLive, :index)
