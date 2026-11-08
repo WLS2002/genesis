@@ -9,7 +9,6 @@ defmodule EvoGit.Agent.ToolsTest do
 
   use ExUnit.Case, async: false
   alias EvoGit.Agent.Tools
-  alias EvoGit.Agent.Tools.ElixirEval
   alias EvoGit.Agents.SelfReflective
   alias EvoGit.TestSupport.ConfigDir
 
@@ -100,75 +99,65 @@ defmodule EvoGit.Agent.ToolsTest do
       end)
     end
 
-    test "SelfReflective exposes evaluation alongside separate source readers, not legacy commands" do
+    test "SelfReflective offers exactly the shared task-control catalog plus the web tools" do
       with_isolated_config(fn ->
         schemas = SelfReflective.available_tools()
         names = Enum.map(schemas, &EvoGit.Agent.tool_name/1)
+        catalog = Enum.map(EvoGit.TaskControl.Tools.list(), & &1.name)
 
-        assert Enum.find(schemas, &(&1.name == "elixir_eval")) == ElixirEval.schema()
+        web_tools =
+          if EvoGit.Config.tools_search_enabled?(),
+            do: ["web_fetch", "web_search"],
+            else: ["web_fetch"]
 
-        for name <- ~w(read read_context list_dir rg glob search_context search_history web_fetch) do
-          assert name in names
-        end
-
-        # No shell/file writers or legacy per-handler tools: runtime mutation
-        # must use the evaluator's separately authorized exact-code route.
-        for old <- ~w(
-              run_command complete_task list_tasks get_task start_task cancel_task
-              force_kill_task delete_task guide_user subagent_investigator
-              list_recent_projects system_info bash write edit create_files
-              make_dir write_context edit_context
-            ) do
-          refute old in names,
-                 "expected #{inspect(old)} to NOT be in SelfReflective.available_tools()"
-        end
-
+        assert Enum.sort(names) == Enum.sort(catalog ++ web_tools)
         assert length(names) == length(Enum.uniq(names))
+
+        # The retired source readers and the evaluator are gone from this surface.
+        for retired <- ~w(
+              elixir_eval read rg glob list_dir read_context search_context
+              search_history run_command bash write edit create_files make_dir
+              write_context edit_context complete_task guide_user
+              subagent_investigator list_recent_projects system_info
+            ) do
+          refute retired in names,
+                 "expected #{inspect(retired)} to NOT be in SelfReflective.available_tools()"
+        end
+
         assert SelfReflective.agent_type() == :read
         assert SelfReflective.delegation_level() == :low
         assert SelfReflective.subagent_modules() == []
       end)
     end
 
-    test "the persona embeds the evaluator catalog and explains the separate approval tiers" do
+    test "the persona teaches the task-control catalog instead of evaluation tiers" do
       prompt = SelfReflective.system_prompt()
 
-      assert prompt =~ ElixirEval.help()
-      assert prompt =~ "`elixir_eval` is your one action tool"
-      assert prompt =~ "`tier` (`read`, `write`, or `sudo`; default `read`)"
-      assert prompt =~ "**Read tier:** Dune sandbox evaluation"
-      assert prompt =~ "**Write tier:** Dune sandbox evaluation"
-      assert prompt =~ "Dune sandbox evaluation"
-      assert prompt =~ "real `CommandApproval` approval of the exact code before execution"
-      assert prompt =~ "a conversational OK is not approval"
-      assert prompt =~ "sudo does not mean OS root"
-      assert prompt =~ "Never automatically escalate tiers"
-      assert prompt =~ "Evaluation targets only the current authenticated runtime node"
+      for %{name: name, description: description} <- EvoGit.TaskControl.Tools.list() do
+        assert prompt =~ "- `#{name}` — #{description}"
+      end
 
-      assert prompt =~
-               "`read`, `rg`, `glob`, `list_dir`, `read_context`, `search_context` (the CONTEXT.md tree) and `search_history`"
-
+      assert prompt =~ "the very same tools the MCP endpoint exposes"
+      assert prompt =~ "You are repo-less"
       assert prompt =~ "A reply with no tool calls ends your run"
+      assert prompt =~ "There is no completion tool"
+
+      refute prompt =~ "elixir_eval"
+      refute prompt =~ "read_context"
       refute prompt =~ "run_command"
     end
 
-    test "repo-less source inspection still dispatches through read, glob and rg", %{
-      tmp_dir: tmp_dir
-    } do
-      source = Path.join(tmp_dir, "example.ex")
-      content = "defmodule SeparateSourceReader do\nend\n"
-      File.write!(source, content)
-      Process.put(:repo_less, true)
+    test "task-control tools are neither write nor serial tools and poll only where needed" do
+      with_isolated_config(fn ->
+        for %{name: name} <- EvoGit.TaskControl.Tools.list() do
+          refute Tools.write_call?(name, %{}), "#{name} must not be classified as a write tool"
+          refute Tools.serial_tool?(name), "#{name} must not be serialized like a write tool"
+        end
 
-      assert Tools.execute("read", %{"file_path" => "example.ex"}, tmp_dir) =~
-               "defmodule SeparateSourceReader"
-
-      assert Tools.execute("glob", %{"pattern" => "*.ex"}, tmp_dir) =~ "example.ex"
-
-      result = Tools.execute("rg", %{"args" => ["SeparateSourceReader", "."]}, tmp_dir)
-      assert result =~ "example.ex"
-      assert result =~ "defmodule SeparateSourceReader"
-      assert File.read!(source) == content
+        # `genesis_get_task` blocks inside the tool for its `wait_seconds` poll.
+        assert Tools.default_timeout_ms("genesis_get_task") == 30_000
+        assert Tools.default_timeout_ms("genesis_start_task") == nil
+      end)
     end
 
     test "legacy run_command is refused before argument decoding or repo-role guards", %{
