@@ -10,7 +10,7 @@ This guide is for the agent carrying out that request. Complete the local instal
 
 The MCP preview lives on [`WLS2002/genesis`, branch `feat/mcp-codex`](https://github.com/WLS2002/genesis/tree/feat/mcp-codex). Clone that branch when given its GitHub link; a plain clone of the repository's default branch does not select the preview.
 
-Use the matching [MCP preview release](https://github.com/WLS2002/genesis/releases/tag/mcp-preview-0.6.0). It includes the runtime, so an Erlang/Elixir source toolchain is unnecessary.
+Use the matching [MCP preview release](https://github.com/WLS2002/genesis/releases/tag/mcp-preview-0.6.1). It includes the runtime, so an Erlang/Elixir source toolchain is unnecessary.
 
 | Environment | Package / preparation |
 | --- | --- |
@@ -24,7 +24,7 @@ Prepare Python 3.9+, Git and the current coding agent. Linux/macOS also need `cu
 **Linux, macOS, or a coding agent running inside WSL:**
 
 ```sh
-export GENESIS_VERSION=mcp-preview-0.6.0
+export GENESIS_VERSION=mcp-preview-0.6.1
 export GENESIS_DOWNLOAD_BASE=https://github.com/WLS2002/genesis/releases/download
 export GENESIS_DOWNLOAD_FALLBACK_BASE=https://github.com/WLS2002/genesis/releases
 python3 scripts/setup-codex.py --method release --json
@@ -33,13 +33,15 @@ python3 scripts/setup-codex.py --method release --json
 **Native Windows, PowerShell:**
 
 ```powershell
-$env:GENESIS_VERSION = "mcp-preview-0.6.0"
+$env:GENESIS_VERSION = "mcp-preview-0.6.1"
 $env:GENESIS_DOWNLOAD_BASE = "https://github.com/WLS2002/genesis/releases/download"
 $env:GENESIS_DOWNLOAD_FALLBACK_BASE = "https://github.com/WLS2002/genesis/releases"
 python scripts/setup-codex.py --method release --json
 ```
 
 The shared setup entry chooses the current platform. Native Windows installs under `%LOCALAPPDATA%\Genesis\server`, reuses Genesis's existing headless desktop host and reports its PID/log path as `runtime_process`. Model/token files live in the backend's `%APPDATA%\genesis`. This starts a background process for the current login, without registering an administrator service. Linux/macOS retain the original `genesis` lifecycle CLI.
+
+Register the MCP URL returned by setup, including its port. Port 9999 is only the headless default; a separately launched desktop window may use a different port. Use the shared setup entry for Coding Agent integration instead of a hand-written start script. On Windows, custom Start-Process commands must use different files for RedirectStandardOutput and RedirectStandardError.
 
 For another compatible coding agent, run `python scripts/setup-genesis.py --method release --json` with the same download settings. It prepares the same service without installing or invoking Codex. Register the private MCP connection and load the returned Skill using the [shared connection contract](docs/agent-mcp.md#connection-contract).
 

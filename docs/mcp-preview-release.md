@@ -1,6 +1,6 @@
 Genesis MCP preview for Linux, macOS, native Windows and WSL.
 
-Start with [INSTALL.md](https://github.com/WLS2002/genesis/blob/mcp-preview-0.6.0/INSTALL.md). It selects the platform, pins this preview's download source, connects MCP and loads the shared Skill. Model setup and development can stay in the calling agent; the Genesis GUI is optional.
+Start with [INSTALL.md](https://github.com/WLS2002/genesis/blob/mcp-preview-0.6.1/INSTALL.md). It selects the platform, pins this preview's download source, connects MCP and loads the shared Skill. Model setup and development can stay in the calling agent; the Genesis GUI is optional.
 
 | Package | Environment |
 | --- | --- |
@@ -15,6 +15,8 @@ Nine tools cover readiness/configuration reload, model discovery, task submissio
 
 Each native package passes installation, live MCP/configuration checks and actual Codex CLI plugin registration before publication. WSL reuses the Linux package and installation workflow. See the per-platform build-info JSON and SHA256 files for exact provenance.
 
-This is a trial prerelease, separate from upstream stable releases. Internal application version remains 0.14.0; the portable Skill/plugin is 0.6.0.
+This is a trial prerelease, separate from upstream stable releases. Internal application version remains 0.14.0; the portable Skill/plugin is 0.6.1.
 
 Task progress is now shared between the task page and MCP, with durable reported outcomes, remaining work, blockers and next steps. Task budgets, targeted-message delivery receipts, bounded stop confirmation and recoverable worker directories improve long-task control. The generic setup entry works without Codex and checks the running build identity before reuse or upgrade.
+
+This preview fixes the report_progress tool constructor that prevented 0.6.0 agents from starting. Native package verification now submits a real MCP task to a local test provider, executes a progress report, continues the model conversation and checks task completion. No paid provider is used by this verification.

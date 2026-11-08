@@ -19,7 +19,8 @@ defmodule EvoGit.Agent.Tools.ReportProgress do
         "type" => "object",
         "additionalProperties" => false,
         "properties" => Map.put(fields, "summary", %{"type" => "string", "maxLength" => 2400})
-      }
+      },
+      callback: fn _ -> {:ok, nil} end
     )
   end
 

@@ -2,6 +2,13 @@ defmodule EvoGit.TaskProgressTest do
   use ExUnit.Case, async: false
   alias EvoGit.{Store, TaskInfo, TaskProgress}
 
+  test "the progress tool can be constructed and exposed with the locked LLM dependency" do
+    tool = EvoGit.Agent.Tools.ReportProgress.schema()
+    assert tool.name == "report_progress"
+    assert {:ok, _} = Jason.encode(tool.parameter_schema)
+    assert tool.parameter_schema["properties"]["summary"]["type"] == "string"
+  end
+
   setup do
     id = "progress-#{System.unique_integer([:positive])}"
     :ok = Store.put_task(%TaskInfo{id: id, status: :running, type: :evolve, opts: []})

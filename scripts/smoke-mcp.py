@@ -19,6 +19,9 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("connector", ROOT / "scripts/install-codex.py")
 connector = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(connector)
+execution_spec = importlib.util.spec_from_file_location("execution", ROOT / "scripts/verify-mcp-execution.py")
+execution = importlib.util.module_from_spec(execution_spec)
+execution_spec.loader.exec_module(execution)
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--assets", type=Path, default=Path("dist"))
 parser.add_argument("--platform", required=True)
@@ -77,6 +80,7 @@ with tempfile.TemporaryDirectory(prefix="Genesis smoke 测试 ") as temporary:
         assert loaded["structuredContent"]["configuration_reloaded"]
         models = connector.rpc(url, token, "tools/call", {"name": "genesis_list_models", "arguments": {}})["result"]
         assert models["structuredContent"]["models"][0]["id"] == "offline"
+        execution_result = execution.verify_execution(connector, url, token, config, trial / "Task project 测试")
 
         # Characterize native stop/restart and replacement with the same tested
         # package. Changing only its identity models an older idle installation.
@@ -114,6 +118,7 @@ with tempfile.TemporaryDirectory(prefix="Genesis smoke 测试 ") as temporary:
         assert restored['model_ready']
         result['runtime_process'] = json.loads((config/'runtime.json').read_text())['runtime_process']
         print(json.dumps({"platform": args.platform, "native_package_install": True,
+            **execution_result,
             "codex_plugin_registration": True, "tools": 9, "file_configuration_reload": True,
             "generic_upgrade_and_rollback": True,
             "provider_connection_tested": False}))

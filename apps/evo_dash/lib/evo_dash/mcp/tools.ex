@@ -29,7 +29,12 @@ defmodule EvoDash.MCP.Tools do
          description: "Development goal, context, constraints and acceptance criteria."
        },
        task_type: %{type: "string", enum: ["evolve", "genesis"], default: "evolve"},
-       mode: %{type: "string", enum: ["simple", "new", "existing"]},
+       mode: %{
+         type: "string",
+         enum: ["simple", "new", "existing"],
+         description:
+           "Allowed pairs: evolve/simple, genesis/new, genesis/existing. Omit mode to use simple for evolve or new for genesis."
+       },
        resume_from: @id,
        model_id: %{type: "string", description: "Optional configured Genesis model profile ID."}
      }, ["path", "objective"], false},

@@ -74,7 +74,7 @@ def rpc(url, token, method, params=None):
 
 def verify_server(url, token):
     initialized = rpc(url, token, "initialize", {"protocolVersion": "2025-11-25", "capabilities": {},
-                                               "clientInfo": {"name": "genesis-installer", "version": "0.6.0"}})
+                                               "clientInfo": {"name": "genesis-installer", "version": "0.6.1"}})
     if initialized.get("result", {}).get("serverInfo", {}).get("name") != "genesis":
         raise ValueError("This endpoint is not a Genesis MCP server. Install a Genesis release containing MCP support.")
     rpc(url, token, "notifications/initialized")

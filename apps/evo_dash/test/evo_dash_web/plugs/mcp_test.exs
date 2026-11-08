@@ -27,6 +27,11 @@ defmodule EvoDashWeb.MCPTest do
              ~w(genesis_cancel_task genesis_check genesis_get_result genesis_get_task genesis_list_models genesis_list_tasks genesis_reload_config genesis_send_message genesis_start_task)
 
     assert Enum.all?(tools, &(&1["inputSchema"]["type"] == "object"))
+    start = Enum.find(tools, &(&1["name"] == "genesis_start_task"))
+    mode = start["inputSchema"]["properties"]["mode"]
+    assert mode["description"] =~ "evolve/simple"
+    assert mode["description"] =~ "genesis/new"
+    assert mode["description"] =~ "genesis/existing"
   end
 
   test "gets existing task errors as tool results and rejects malformed arguments" do
