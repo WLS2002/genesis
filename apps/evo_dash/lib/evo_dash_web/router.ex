@@ -24,7 +24,9 @@ defmodule EvoDashWeb.Router do
   scope "/", EvoDashWeb do
     pipe_through(:browser)
 
-    live("/", ProjectsLive, :index)
+    live("/", HomeLive, :index)
+    live("/assistant", HomeLive, :index)
+    live("/help", HomeLive, :index)
     live("/help", HomeLive, :index)
     live("/projects", ProjectsLive, :index)
     live("/welcome", WelcomeLive, :index)

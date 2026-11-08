@@ -67,7 +67,7 @@ defmodule EvoDashWeb.HomeLive do
     ~H"""
     <EvoDashWeb.Layouts.app
       flash={@flash}
-      current_page={:help}
+      current_page={:assistant}
       current_node_id={@current_node_id}
       current_node_name={@current_node_name}
       running_tasks={@running_tasks}
@@ -82,11 +82,36 @@ defmodule EvoDashWeb.HomeLive do
         <div class="shrink-0 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-base-300 px-3 pt-3 pb-3 sm:px-4 sm:pt-4">
           <div class="min-w-0 basis-full sm:basis-auto sm:flex-1">
             <h1 class="text-base font-semibold truncate">
-              <%!-- zh_CN: Genesis Assistant 是此对话助手的名称 --%>{gettext(
-                "Genesis Assistant"
+              <%!-- zh_CN: 助手 --%>{gettext(
+                "Assistant"
               )}
             </h1>
           </div>
+          <form
+            id="assistant-workspace-form"
+            phx-change="select_workspace"
+            class="basis-full order-last flex flex-wrap items-center gap-2"
+          >
+            <label for="assistant-workspace" class="sr-only">{gettext("Workspace")}</label>
+            <select
+              id="assistant-workspace"
+              name="workspace"
+              class="select select-sm select-bordered w-full max-w-xs"
+            >
+              <%!-- zh_CN: "选择工作区…" --%>
+              <option value="">{gettext("Select a workspace…")}</option>
+              <option
+                :for={project <- @recent_projects}
+                value={project.path}
+                selected={project.path == @workspace}
+              >
+                {project.name}
+              </option>
+            </select>
+            <.link navigate={workspace_link(@current_node_id)} class="link link-primary text-sm">
+              <%!-- zh_CN: "打开或新建项目" --%>{gettext("Open or create project")}
+            </.link>
+          </form>
           <form id="chat-llm-selection-form" class="basis-full order-last">
             <.llm_selection
               id="chat-llm-selection"
@@ -133,7 +158,30 @@ defmodule EvoDashWeb.HomeLive do
           class="flex-1 min-h-0 min-w-0 overflow-y-auto overscroll-contain scrollbar-thin"
         >
           <%= if @transcript == [] do %>
-            <.empty_state source_gate?={SourceGate.blocked?(assigns)} />
+            <%= if is_nil(@workspace) do %>
+              <div
+                id="assistant-workspace-required"
+                class="min-h-full flex flex-col items-center justify-center gap-3 px-4 py-8 text-center sm:px-6"
+              >
+                <div class="flex size-12 items-center justify-center rounded-full bg-base-200">
+                  <.icon name="hero-folder-open" class="size-6 text-primary-standalone" />
+                </div>
+                <%!-- zh_CN: "先选择工作区" --%>
+                <h2 class="text-2xl sm:text-3xl font-semibold tracking-tight text-base-content">
+                  {gettext("Select a workspace to start")}
+                </h2>
+                <p class="max-w-md text-sm leading-relaxed text-base-content/70">
+                  <%!-- zh_CN: 助手需要一个工作区目录，才能读取代码并执行操作。 --%>{gettext(
+                    "The assistant needs a workspace before it can read code or make changes."
+                  )}
+                </p>
+                <.link navigate={workspace_link(@current_node_id)} class="link link-primary text-sm">
+                  {gettext("Open or create project")}
+                </.link>
+              </div>
+            <% else %>
+              <.empty_state source_gate?={SourceGate.blocked?(assigns)} />
+            <% end %>
           <% else %>
             <.message_list
               transcript={@transcript}
@@ -209,7 +257,9 @@ defmodule EvoDashWeb.HomeLive do
               value={@chat_draft}
               phx-keydown="chat_keydown"
               phx-keyup="chat_keyup"
-              disabled={@chat_status != :idle or SourceGate.blocked?(assigns)}
+              disabled={
+                @chat_status != :idle or SourceGate.blocked?(assigns) or is_nil(@workspace)
+              }
               placeholder={gettext("Message Genesis Assistant…")}
               rows="1"
               aria-label={gettext("Message Genesis Assistant…")}
@@ -222,7 +272,8 @@ defmodule EvoDashWeb.HomeLive do
               type="submit"
               disabled={
                 @chat_status != :idle or SourceGate.blocked?(assigns) or
-                  is_nil(@model_snapshot) or not is_nil(@model_selection_error)
+                  is_nil(@model_snapshot) or not is_nil(@model_selection_error) or
+                  is_nil(@workspace)
               }
               class={"help-send-btn flex size-9 shrink-0 items-center justify-center rounded-full bg-primary text-primary-content transition hover:opacity-90 active:scale-95 disabled:opacity-40 disabled:pointer-events-none " <> if(@chat_status == :running, do: "hidden", else: "")}
             >
@@ -348,7 +399,14 @@ defmodule EvoDashWeb.HomeLive do
       source_check_loading: false,
       source_check_seq: 0,
       source_busy: nil,
-      current_path: ~p"/help"
+      current_path: ~p"/help",
+      # Assistant workspace gate: chatting requires an explicitly chosen
+      # workspace. `recent_projects` is loaded node-aware OFF the LiveView
+      # process (see assign_recent_projects/1); `workspace` is the chosen
+      # absolute path (persisted per chat via ChatState) or nil.
+      workspace: nil,
+      recent_projects: [],
+      recent_projects_seq: 0
     }
   end
 
@@ -556,6 +614,7 @@ defmodule EvoDashWeb.HomeLive do
       socket
       |> assign_model_select()
       |> assign(current_path: ~p"/help")
+      |> assign_recent_projects()
       # Genesis-source availability for the resolved node context: fires on the
       # connected mount AND on every node-context change (this is the same place
       # the page reacts to `?node=` switches). Local-node only + connected-only
@@ -665,6 +724,15 @@ defmodule EvoDashWeb.HomeLive do
   end
 
   @impl true
+  # Workspace selection: assign + persist only. Never restarts the running
+  # task and never clears the transcript.
+  @impl true
+  def handle_event("select_workspace", %{"workspace" => path}, socket) do
+    workspace = if is_binary(path) and path != "", do: path
+
+    {:noreply, socket |> assign(workspace: workspace) |> persist_state()}
+  end
+
   def handle_event("new_chat", _params, socket) do
     if socket.assigns[:chat_status] == :idle do
       {:noreply, start_new_chat(socket)}
@@ -988,6 +1056,33 @@ defmodule EvoDashWeb.HomeLive do
   end
 
   @impl true
+  # Async, node-aware recent-projects load for the workspace selector.
+  # Applies only when the viewed node AND the monotonic sequence still match.
+  def handle_info({{:recent_projects_loaded, seq, target_node}, result}, socket) do
+    if target_node == (socket.assigns[:current_node] || node()) and
+         seq == socket.assigns[:recent_projects_seq] do
+      projects =
+        case result do
+          {:ok, list} -> normalize_projects(list)
+          _other -> []
+        end
+
+      workspace =
+        socket.assigns[:workspace] ||
+          case projects do
+            [%{path: path} | _] -> path
+            [] -> nil
+          end
+
+      {:noreply,
+       socket
+       |> assign(recent_projects: projects, workspace: workspace)
+       |> persist_state()}
+    else
+      {:noreply, socket}
+    end
+  end
+
   def handle_info({:node_selected, node_id}, socket) do
     NodeAware.handle_node_selected(socket, node_id)
   end
@@ -1022,6 +1117,10 @@ defmodule EvoDashWeb.HomeLive do
            gettext("Connect to the remote node before sending a message.")
          )}
 
+      is_nil(socket.assigns[:workspace]) ->
+        {:noreply,
+         put_flash(socket, :error, gettext("Select a workspace before sending a message."))}
+
       SourceGate.blocked?(socket.assigns) ->
         {:noreply,
          put_flash(
@@ -1045,11 +1144,17 @@ defmodule EvoDashWeb.HomeLive do
       if text == "" do
         {:noreply, socket}
       else
-        objective =
+        preamble =
           case Transcript.build_preamble(socket.assigns[:transcript]) do
-            {:ok, preamble} -> preamble <> "New message: " <> text
-            :empty -> text
+            {:ok, preamble} -> preamble
+            :empty -> ""
           end
+
+        # The workspace block goes FIRST so the agent always knows which
+        # directory the conversation is about.
+        objective =
+          "## Workspace\npath: " <>
+            to_string(socket.assigns[:workspace]) <> "\n\n" <> preamble <> "New message: " <> text
 
         # Validate before touching the transcript/draft. A missing, stale or
         # wrong-node snapshot must not create a bubble or silently submit Auto.
@@ -1502,6 +1607,56 @@ defmodule EvoDashWeb.HomeLive do
 
     socket
   end
+
+  # Loads the viewed node's recent projects for the workspace selector, OFF the
+  # LiveView process (a remote node answers via `:erpc`). Bumps the monotonic
+  # `:recent_projects_seq` guard first; a failed load degrades to `[]` (the
+  # selector still offers the "Open or create project" link).
+  defp assign_recent_projects(socket) do
+    target_node = socket.assigns[:current_node] || node()
+    seq = socket.assigns[:recent_projects_seq] + 1
+    socket = assign(socket, recent_projects_seq: seq)
+
+    if connected?(socket) do
+      case EvoDash.SafeCall.start(self(), {:recent_projects_loaded, seq, target_node}, fn ->
+             EvoDash.NodeContext.list_recent_projects(target_node)
+           end) do
+        {:ok, _pid} -> socket
+        {:error, _reason} -> assign(socket, recent_projects: [])
+      end
+    else
+      socket
+    end
+  end
+
+  # Normalizes both struct and string-keyed map projections into
+  # `%{path: binary, name: binary}`; malformed entries are dropped.
+  defp normalize_projects(projects) when is_list(projects) do
+    projects
+    |> Enum.map(fn
+      %{path: path} = project when is_binary(path) ->
+        %{path: path, name: project_name(project) || path}
+
+      %{"path" => path} = project when is_binary(path) ->
+        %{path: path, name: project_name(project) || path}
+
+      _other ->
+        nil
+    end)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp normalize_projects(_projects), do: []
+
+  defp project_name(project) do
+    case Map.get(project, :name) || Map.get(project, "name") do
+      name when is_binary(name) and name != "" -> name
+      _other -> nil
+    end
+  end
+
+  defp workspace_link(nil), do: "/projects"
+  defp workspace_link(node_id), do: "/projects?node=" <> to_string(node_id)
 
   # Stale-guard for async chat fetches: the result applies only when the node
   # context is unchanged AND no newer fetch was spawned since.

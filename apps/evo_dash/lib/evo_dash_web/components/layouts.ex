@@ -141,6 +141,12 @@ defmodule EvoDashWeb.Layouts do
         <!-- Navigation Links -->
         <%= if !@simple_nav do %>
           <nav class="flex-1 px-2 py-3 space-y-0.5 overflow-y-auto">
+            <%!-- zh_CN: "助手" — 默认入口（导航第一项） --%>
+            <.sidebar_nav_link
+              navigate={with_node_param(~p"/assistant", @current_node_id)}
+              current={@current_page == :assistant}
+              icon="hero-sparkles"
+            >{gettext("Assistant")}</.sidebar_nav_link>
             <.sidebar_nav_link
               navigate={with_node_param(~p"/projects", @current_node_id)}
               current={@current_page == :dashboard}
@@ -167,12 +173,6 @@ defmodule EvoDashWeb.Layouts do
               icon="hero-server-stack"
               notification={update_status_notification(@update_status)}
             >{gettext("System")}</.sidebar_nav_link>
-            <%!-- zh_CN: "助手" — 指向 Genesis 助手（理解并操控 Genesis 的代理）聊天页面的侧边栏入口 --%>
-            <.sidebar_nav_link
-              navigate={with_node_param(~p"/help", @current_node_id)}
-              current={@current_page == :help}
-              icon="hero-chat-bubble-left-right"
-            >{gettext("Assistant")}</.sidebar_nav_link>
 
             <!-- Task Indicators Section -->
             <div :if={@running_tasks != [] or @pending_tasks != []} class="pt-5 mt-4">
@@ -598,6 +598,7 @@ defmodule EvoDashWeb.Layouts do
   @doc """
   Maps current page atom to its route path.
   """
+  def current_page(:assistant), do: "/assistant"
   def current_page(:dashboard), do: "/projects"
   def current_page(:phx_dashboard), do: "/dashboard"
   def current_page(:agents), do: "/agents"
