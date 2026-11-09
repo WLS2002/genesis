@@ -9,23 +9,6 @@ defmodule EvoGit.Runtime.SelfReflective do
   require Logger
 
   @doc """
-  Resolves the Genesis source root — the directory the reflective agent reads.
-
-  Delegates to `EvoGit.SelfReflectiveSource.reference_path/0` — the single
-  source of truth for the chain: `:self_reflective_source_root` app env →
-  `GENESIS_SOURCE_ROOT` env var → the managed clone at
-  `EvoGit.SelfReflectiveSource.source_dir/0` when it exists and is a valid
-  Genesis checkout (auto-reference) → `nil`. Falls back to `File.cwd!()`
-  (dev: the genesis repo itself) when the chain resolves to nil. The
-  scheduler resolves the repo-less agent's repo root from the SAME chain via
-  `EvoGit.AgentScheduler.Dispatch.resolve_repo_less_root/0` — both delegate
-  to `SelfReflectiveSource.reference_path/0` so they always agree.
-  """
-  def source_root do
-    EvoGit.SelfReflectiveSource.reference_path() || File.cwd!()
-  end
-
-  @doc """
   Runs a self-reflective (repo-less) task. Two entry arities:
 
     * `run(opts)` — opts keyword; objective read from `opts[:objective]` (default "")
@@ -67,9 +50,8 @@ defmodule EvoGit.Runtime.SelfReflective do
   `phylo_node` is nil, and the context-node shape — always the bare minimal
   `%ContextNode{}` with a `"[system]"` placeholder repo.
 
-  The spec deliberately carries NO source-tree context: the assistant reads
-  Genesis source through its own source tools (see `source_root/0`), so the
-  context node must not be loaded from the source root.
+  The assistant operates through the shared task-control catalog. It receives
+  no Genesis source-tree context and does not require a source checkout.
   """
   def build_spec(objective, opts \\ []) when is_binary(objective) and is_list(opts) do
     node_path = Keyword.get(opts, :node_path, "./")

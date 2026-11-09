@@ -39,36 +39,36 @@ defmodule EvoDashWeb.HomeLive.ChatMessages do
       <p class="max-w-md text-sm leading-relaxed text-base-content/70">
         <%!-- zh_CN: "开始对话" --%>{gettext("Start a conversation")}
       </p>
-        <div class="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-2xl">
-          <%!-- zh_CN: "显示我的运行中任务" --%>
-          <.suggestion_chip message={gettext("Show my running tasks")}>
-            <.icon
-              name="hero-light-bulb"
-              class="size-4 shrink-0 text-base-content/60 group-hover:text-base-content"
-            />
-          </.suggestion_chip>
-          <%!-- zh_CN: "检查系统状态与容量" --%>
-          <.suggestion_chip message={gettext("Check system status and capacity")}>
-            <.icon
-              name="hero-magnifying-glass"
-              class="size-4 shrink-0 text-base-content/60 group-hover:text-base-content"
-            />
-          </.suggestion_chip>
-          <%!-- zh_CN: "帮我启动一个任务" --%>
-          <.suggestion_chip message={gettext("Start a task for me")}>
-            <.icon
-              name="hero-puzzle-piece"
-              class="size-4 shrink-0 text-base-content/60 group-hover:text-base-content"
-            />
-          </.suggestion_chip>
-          <%!-- zh_CN: "解释任务是如何被调度的" --%>
-          <.suggestion_chip message={gettext("Explain how tasks are scheduled")}>
-            <.icon
-              name="hero-map"
-              class="size-4 shrink-0 text-base-content/60 group-hover:text-base-content"
-            />
-          </.suggestion_chip>
-        </div>
+      <div class="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-2xl">
+        <%!-- zh_CN: "显示我的运行中任务" --%>
+        <.suggestion_chip message={gettext("Show my running tasks")}>
+          <.icon
+            name="hero-light-bulb"
+            class="size-4 shrink-0 text-base-content/60 group-hover:text-base-content"
+          />
+        </.suggestion_chip>
+        <%!-- zh_CN: "检查系统状态与容量" --%>
+        <.suggestion_chip message={gettext("Check system status and capacity")}>
+          <.icon
+            name="hero-magnifying-glass"
+            class="size-4 shrink-0 text-base-content/60 group-hover:text-base-content"
+          />
+        </.suggestion_chip>
+        <%!-- zh_CN: "帮我启动一个任务" --%>
+        <.suggestion_chip message={gettext("Start a task for me")}>
+          <.icon
+            name="hero-puzzle-piece"
+            class="size-4 shrink-0 text-base-content/60 group-hover:text-base-content"
+          />
+        </.suggestion_chip>
+        <%!-- zh_CN: "解释任务是如何被调度的" --%>
+        <.suggestion_chip message={gettext("Explain how tasks are scheduled")}>
+          <.icon
+            name="hero-map"
+            class="size-4 shrink-0 text-base-content/60 group-hover:text-base-content"
+          />
+        </.suggestion_chip>
+      </div>
     </div>
     """
   end

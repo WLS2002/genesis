@@ -61,7 +61,7 @@ defmodule EvoGit.CommandShellTest do
               []
             ] do
           assert EvoGit.Agent.Tools.execute("run_command", args, nil, nil, nil) ==
-                   "Error: use elixir_eval exact-code approval path"
+                   "Error: run_command is not available to agents; use the task-control tools or the dashboard."
 
           assert TaskRegistry.get_task(task.id).status == :pending
         end

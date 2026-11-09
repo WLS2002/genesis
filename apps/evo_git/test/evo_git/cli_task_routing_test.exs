@@ -354,7 +354,7 @@ defmodule EvoGit.CLI.TaskRoutingTest do
       command = "CancelTask.cancel_task #{id}"
 
       assert EvoGit.Agent.Tools.execute("run_command", %{"command" => command}, nil, nil, nil) ==
-               "Error: use elixir_eval exact-code approval path"
+               "Error: run_command is not available to agents; use the task-control tools or the dashboard."
 
       assert TaskRegistry.get_task(id).status == :pending
 

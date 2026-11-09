@@ -83,7 +83,7 @@ defmodule EvoGit.Agent.ToolsTest do
     end
   end
 
-  describe "assistant-only evaluator containment" do
+  describe "retired evaluator compatibility" do
     test "neither shared schema set nor ordinary coding agents expose runtime evaluation" do
       with_isolated_config(fn ->
         for schemas <- [
@@ -172,7 +172,7 @@ defmodule EvoGit.Agent.ToolsTest do
 
         for input <- [args, Jason.encode!(args), "not-json", nil, [], 42] do
           assert Tools.execute("run_command", input, tmp_dir, tmp_dir, "./") ==
-                   "Error: use elixir_eval exact-code approval path"
+                   "Error: run_command is not available to agents; use the task-control tools or the dashboard."
         end
       end
     end
@@ -194,16 +194,15 @@ defmodule EvoGit.Agent.ToolsTest do
           for input <- [args, Jason.encode!(args)] do
             result = Tools.execute("elixir_eval", input, tmp_dir, tmp_dir, "./")
             assert result =~ "Error:"
-            assert result =~ "requires a live root reflective assistant on the local node"
-            refute result =~ "Unknown tool"
+            assert result =~ "Unknown tool 'elixir_eval'"
             refute File.exists?(marker)
           end
         end
       end
     end
 
-    test "the evaluator has a bounded advertised outer timeout distinct from its engine cap" do
-      assert Tools.default_timeout_ms("elixir_eval") == 30_000
+    test "the removed evaluator has no advertised timeout" do
+      assert Tools.default_timeout_ms("elixir_eval") == nil
       refute Tools.timeout_arg_is_wait_budget?("elixir_eval")
     end
   end
@@ -237,12 +236,9 @@ defmodule EvoGit.Agent.ToolsTest do
       end)
     end
 
-    test "evaluation is always serial by name, independently of tier or file-write classification" do
-      # The classifier takes ONLY the name, not args. This pins serialization
-      # before tier decoding: omitted/read/write/sudo and malformed calls cannot
-      # enter the parallel batch simply because they are not file-write tools.
+    test "the removed evaluator has no special serialization policy" do
       with_isolated_config(fn ->
-        assert Tools.serial_tool?("elixir_eval")
+        refute Tools.serial_tool?("elixir_eval")
         refute Tools.write_call?("elixir_eval", %{"tier" => "sudo"})
       end)
     end

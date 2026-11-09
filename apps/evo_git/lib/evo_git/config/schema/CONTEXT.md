@@ -66,10 +66,6 @@ Callers (all of them): boot — `EvoGit.CatalogWarmup.warm_up/1` (a throwaway pr
 Tests inject stub metadata through the seam, so no catalog is needed.
 
 ## Assistant Evaluation / Configuration Boundaries
-The evaluator's explicit MFA/tier lists, not namespace grants or an API's public visibility, determine admission; the authoritative policy and full inventory live in `../../agent/tools/elixir_eval/CONTEXT.md`.
-`EvoGit.Config.resolve/0,1` are admitted direct reads in read/write tiers, while `EvoGit.Config.save_user_config/1`, `EvoGit.AgentScheduler.RemoteAPI.reload_config/0` and `EvoGit.AgentScheduler.update_config/1` are admitted only in write tier.
-Write tier requires exact-code tier-2 manual approval; unrestricted native sudo requires its separate explicit approval and is not a security sandbox, and denied operations never auto-escalate.
-These boundaries guard against accidental Assistant self-corruption, not a malicious attacker with unrestricted sudo authority.
 Direct reads retain actual nested values, potentially including secrets, and are neither facade projections nor secret-safe; output caps are not redaction.
 `Config.resolve/0,1` reads normalized defaults plus user configuration, not live scheduler overrides; direct `AgentScheduler.update_config/1` changes runtime settings without persisting them.
 `Config.save_user_config/1` replaces the whole file rather than patching and does not automatically reload the scheduler.

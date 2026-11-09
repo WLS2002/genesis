@@ -18,7 +18,7 @@ forces serialization — keep it accurate when the forcing state changes. Do NOT
   PROCESS via `EvoGit.TestSupport.ConfigDir.isolate!/1` (no `XDG_CONFIG_HOME` mutation).
 - **`self_reflective_test.exs`** — the `:self_reflective_source_root` / `:self_reflective_source_dir`
   app env and the `GENESIS_SOURCE_ROOT` OS env var (read by production
-  `EvoGit.Runtime.SelfReflective.source_root/0` / `EvoGit.SelfReflectiveSource.reference_path/0`),
+  the legacy source-reference helper),
   plus the live scheduler's `model_profiles`.
 
 Genuinely `async: true` (verified to mutate no BEAM-global state):

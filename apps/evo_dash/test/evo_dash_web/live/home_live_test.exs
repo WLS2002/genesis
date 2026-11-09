@@ -3207,7 +3207,6 @@ defmodule EvoDashWeb.HomeLiveTest do
       send(view.pid, {{:model_select_loaded, local_seq, node()}, {:ok, {:error, :obsolete}}})
       assert assigns(view).model_select_load_error == nil
     end
-
   end
 
   describe "assistant entry routes" do

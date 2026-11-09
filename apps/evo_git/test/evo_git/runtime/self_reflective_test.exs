@@ -1,40 +1,8 @@
 defmodule EvoGit.Runtime.SelfReflectiveTest do
-  @moduledoc """
-  Mutates process-global state observable by production and concurrently running modules →
-  `async: false`: the `:self_reflective_source_root`/`:self_reflective_source_dir` app env and
-  the `GENESIS_SOURCE_ROOT` env var (read by `EvoGit.Runtime.SelfReflective.source_root/0` /
-  `EvoGit.SelfReflectiveSource.reference_path/0`), plus the live scheduler's `model_profiles`.
-  """
+  @moduledoc "Repo-less task-control runtime; serial because tests modify scheduler configuration and legacy source settings."
   use ExUnit.Case, async: false
 
   alias EvoGit.Runtime.SelfReflective
-
-  # The :self_reflective_source_root app env, the :self_reflective_source_dir
-  # app env, and the GENESIS_SOURCE_ROOT OS env var are global state; every
-  # assertion that reads source_root() must restore them afterwards so other
-  # tests and later assertions in this file see a clean state. This mirrors the
-  # on_exit restore discipline of test/evo_git/runtime/evolution_test.exs.
-  describe "source_root/0" do
-    test "app env wins over the env var" do
-      with_self_reflective_env("/tmp/from-app-env", "/tmp/from-env-var", fn ->
-        assert SelfReflective.source_root() == "/tmp/from-app-env"
-      end)
-    end
-
-    test "env var wins when the app env is absent or empty" do
-      for app_env <- [nil, ""] do
-        with_self_reflective_env(app_env, "/tmp/from-env-var", fn ->
-          assert SelfReflective.source_root() == "/tmp/from-env-var"
-        end)
-      end
-    end
-
-    test "falls back to File.cwd!() when both are absent" do
-      with_self_reflective_env(nil, nil, fn ->
-        assert SelfReflective.source_root() == File.cwd!()
-      end)
-    end
-  end
 
   describe "build_spec/2" do
     test "produces the repo-less spec shape" do

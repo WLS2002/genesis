@@ -291,7 +291,7 @@ defmodule EvoGit.Agent.ContextBuilder do
   agent's live/finished background shell jobs, rendered by
   `EvoGit.Agent.BackgroundJobNotice.section/1`; absent/`nil`/`[]` renders
   nothing, so the block stays byte-identical for an agent with no jobs). A
-  `%LoopState{}` satisfies this. Purely reads the CONTEXT.md chain from disk via
+  `%LoopState{}` satisfies this. Repo-backed agents read the CONTEXT.md chain from disk via
   `build_dynamic_context/1` — so calling it
   again later re-reads the CURRENT chain — plus the static sections, drops
   blank ones, joins them with `"\\n\\n"`, and wraps them via `context_block/1`.
@@ -313,10 +313,14 @@ defmodule EvoGit.Agent.ContextBuilder do
     parent_id = Map.get(state, :parent_id)
 
     context_tree =
-      build_dynamic_context(%{
-        node_path: Map.get(state, :node_path),
-        repo_path: Map.get(state, :repo_path)
-      })
+      if repo_less do
+        ""
+      else
+        build_dynamic_context(%{
+          node_path: Map.get(state, :node_path),
+          repo_path: Map.get(state, :repo_path)
+        })
+      end
 
     body =
       [

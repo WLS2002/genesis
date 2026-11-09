@@ -126,7 +126,7 @@ The page omits `result/logs/usage` but retains whole unredacted `opts/error`, so
 Legacy `safe_select_paginated_tasks/2` returns `{[TaskInfo], total}`, reads nested `:filters` only, defaults invalid/nonpositive limits to 50 WITHOUT capping positive integers, and returns an empty page rather than redirecting an out-of-range offset.
 - `get_task_lite(store \\ __MODULE__, task_id)` → `%EvoGit.TaskInfo{} | nil`, field-identical to `get_task/2` through the same `Codec.decode_task/1`, including FULL `opts/logs/result/usage/error` and `ref: nil`.
 Its 18-column query omits only store-internal `updated_at`, so it is FULL detail, NOT a bounded or blob-light inspection API.
-`TaskRegistry.list_tasks_page/0,1`, `get_task_lite/1` and `get_task/1` return the real API values described here, including when called through `elixir_eval`; there is no evaluator-facade substitution or secret-safe payload contract.
+`TaskRegistry.list_tasks_page/0,1`, `get_task_lite/1` and `get_task/1` return the real API values described here, without an assistant-specific projection; there is no evaluator-facade substitution or secret-safe payload contract.
 The page's SQL projection is real, but neither its unredacted `opts/error` nor the full-detail reads become redacted or byte-bounded at the evaluator boundary.
 
 The PER-AGENT ARCHIVE API (`task_agent_archives`, see "Per-Agent Archive"):

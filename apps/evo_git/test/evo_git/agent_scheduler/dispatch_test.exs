@@ -1,5 +1,5 @@
 defmodule EvoGit.AgentScheduler.DispatchTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias EvoGit.Adapters.Git
   alias EvoGit.AgentSpec
@@ -161,118 +161,30 @@ defmodule EvoGit.AgentScheduler.DispatchTest do
   end
 
   describe "resolve_agent_repo_root/2 with repo-less agent" do
-    test "returns a binary for a repo-less agent without crashing on nil phylo_node" do
-      original_dir = Application.get_env(:evo_git, :self_reflective_source_dir)
-
-      try do
-        # Isolate the managed-dir step of the unified chain (point it at a
-        # non-existent path) so a real managed clone under the real data dir
-        # can never hijack the chain in tests.
-        Application.put_env(
-          :evo_git,
-          :self_reflective_source_dir,
-          "/nonexistent/evogit-selfref-source"
-        )
-
-        spec =
-          AgentSpec.new(
-            %ContextNode{path: "./", repo: "/tmp"},
-            nil,
-            EvoGit.Agents.SelfReflective,
-            "reflect on the codebase",
-            repo_less: true
-          )
-
-        result = Dispatch.resolve_agent_repo_root(spec, %State{})
-
-        # Never a KeyError on the nil phylo_node — a plain binary root instead
-        # (in the test env this is typically File.cwd!(); do not hardcode it).
-        assert is_binary(result)
-        assert result != ""
-      after
-        case original_dir do
-          nil -> Application.delete_env(:evo_git, :self_reflective_source_dir)
-          _ -> Application.put_env(:evo_git, :self_reflective_source_dir, original_dir)
-        end
-      end
-    end
-
-    test "prefers the :self_reflective_source_root app env when set" do
+    test "uses the process working directory independently of the old source setting" do
       original = Application.get_env(:evo_git, :self_reflective_source_root)
-      original_dir = Application.get_env(:evo_git, :self_reflective_source_dir)
+
+      Application.put_env(
+        :evo_git,
+        :self_reflective_source_root,
+        "/nonexistent/retired-genesis-source"
+      )
 
       try do
-        Application.put_env(:evo_git, :self_reflective_source_root, "/tmp/fake-source")
-
-        Application.put_env(
-          :evo_git,
-          :self_reflective_source_dir,
-          "/nonexistent/evogit-selfref-source"
-        )
-
         spec =
           AgentSpec.new(
-            %ContextNode{path: "./", repo: "/tmp"},
+            %ContextNode{path: "./", repo: "[system]"},
             nil,
             EvoGit.Agents.SelfReflective,
-            "x",
+            "manage tasks",
             repo_less: true
           )
 
-        assert Dispatch.resolve_agent_repo_root(spec, %State{}) == "/tmp/fake-source"
+        assert Dispatch.resolve_agent_repo_root(spec, %State{}) == File.cwd!()
       after
-        case original do
-          nil -> Application.delete_env(:evo_git, :self_reflective_source_root)
-          _ -> Application.put_env(:evo_git, :self_reflective_source_root, original)
-        end
-
-        case original_dir do
-          nil -> Application.delete_env(:evo_git, :self_reflective_source_dir)
-          _ -> Application.put_env(:evo_git, :self_reflective_source_dir, original_dir)
-        end
-      end
-    end
-
-    test "falls back to the GENESIS_SOURCE_ROOT env var when the app env is absent" do
-      original_app_env = Application.get_env(:evo_git, :self_reflective_source_root)
-      original_sys_env = System.get_env("GENESIS_SOURCE_ROOT")
-      original_dir = Application.get_env(:evo_git, :self_reflective_source_dir)
-
-      try do
-        Application.delete_env(:evo_git, :self_reflective_source_root)
-        System.put_env("GENESIS_SOURCE_ROOT", "/tmp/from-env")
-
-        Application.put_env(
-          :evo_git,
-          :self_reflective_source_dir,
-          "/nonexistent/evogit-selfref-source"
-        )
-
-        spec =
-          AgentSpec.new(
-            %ContextNode{path: "./", repo: "/tmp"},
-            nil,
-            EvoGit.Agents.SelfReflective,
-            "x",
-            repo_less: true
-          )
-
-        assert Dispatch.resolve_agent_repo_root(spec, %State{}) == "/tmp/from-env"
-      after
-        case original_app_env do
-          nil -> Application.delete_env(:evo_git, :self_reflective_source_root)
-          _ -> Application.put_env(:evo_git, :self_reflective_source_root, original_app_env)
-        end
-
-        case original_sys_env do
-          nil -> System.delete_env("GENESIS_SOURCE_ROOT")
-          _ -> System.put_env("GENESIS_SOURCE_ROOT", original_sys_env)
-        end
-
-        case original_dir do
-          nil -> Application.delete_env(:evo_git, :self_reflective_source_dir)
-          _ -> Application.put_env(:evo_git, :self_reflective_source_dir, original_dir)
-        end
+        if is_nil(original),
+          do: Application.delete_env(:evo_git, :self_reflective_source_root),
+          else: Application.put_env(:evo_git, :self_reflective_source_root, original)
       end
     end
   end

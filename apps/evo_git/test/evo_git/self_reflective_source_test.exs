@@ -6,7 +6,6 @@ defmodule EvoGit.SelfReflectiveSourceTest do
   alias EvoGit.AgentScheduler.Dispatch
   alias EvoGit.AgentScheduler.State
   alias EvoGit.Core.ContextNode
-  alias EvoGit.Runtime.SelfReflective
   alias EvoGit.SelfReflectiveSource
 
   # The four env knobs (:self_reflective_source_root / :self_reflective_source_dir /
@@ -203,31 +202,13 @@ defmodule EvoGit.SelfReflectiveSourceTest do
     end
   end
 
-  describe "chain delegate equivalence" do
-    test "Runtime.SelfReflective.source_root/0 returns the reference path when set" do
+  describe "assistant independence" do
+    test "the assistant working directory ignores the legacy reference path" do
       set_app_env(:self_reflective_source_root, "/tmp/from-app-env")
-
-      assert SelfReflective.source_root() == SelfReflectiveSource.reference_path()
-      assert SelfReflective.source_root() == "/tmp/from-app-env"
-    end
-
-    test "Runtime.SelfReflective.source_root/0 falls back to File.cwd!() when reference is nil" do
-      set_app_env(:self_reflective_source_dir, tmp_path!("nothing"))
-
-      assert SelfReflectiveSource.reference_path() == nil
-      assert SelfReflective.source_root() == File.cwd!()
-    end
-
-    test "Dispatch.resolve_agent_repo_root/2 mirrors the reference path" do
-      set_app_env(:self_reflective_source_root, "/tmp/from-app-env")
-
-      assert Dispatch.resolve_agent_repo_root(repo_less_spec(), %State{}) == "/tmp/from-app-env"
+      assert Dispatch.resolve_agent_repo_root(repo_less_spec(), %State{}) == File.cwd!()
     end
 
     test "Dispatch.resolve_agent_repo_root/2 returns a binary when all knobs are absent" do
-      # The "[system]" fallback only triggers when File.cwd!() itself returns
-      # nil, which never happens in tests — assert the practical File.cwd!()
-      # middle step instead.
       set_app_env(:self_reflective_source_dir, tmp_path!("nothing"))
 
       assert SelfReflectiveSource.reference_path() == nil

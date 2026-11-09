@@ -10,9 +10,8 @@ Top-level source directory for the `:evo_git` OTP application. Contains the appl
 - `./evo_git/task_registry/` + `./evo_git/runtime/` → Explicit task selection admission, persistence and runtime threading.
 - `./evo_git/cli/` → Provider-profile setup and selection parsing, integrated by the parent `evo_git/cli.ex` entry point.
 - `./mix/tasks/` → Release-time Mix tasks (`Mix.Tasks.Changelog`, `Mix.Tasks.Bump.Version`, `Mix.Tasks.Migrate.Store`) — detail in `./mix/tasks/CONTEXT.md`
-- `./evo_git/` → Repo-less Genesis assistant with one tiered `elixir_eval` tool (`agent/tools/elixir_eval/`), SelfReflective persona (`agents/`), runtime targeting (`runtime/`) and exact-code approval (`command_approval.ex`).
+- `./evo_git/` → Built-in task-control assistant (`agents/`), shared `TaskControl.Tools` catalog and repo-less runtime (`runtime/`).
 - `./evo_git/` → Direct CLI fixed-command compatibility remains in `command_shell.ex`; the assistant exposes read/write Dune evaluation and explicitly approved native sudo rather than `run_command`.
-- `./evo_git/agent/tools/elixir_eval/CONTEXT.md` → Dune dependency/API, capability whitelist, authorization, resource limits and parent-owned evaluator test contracts.
 
 ## API Surface
 | File | Module | Description |

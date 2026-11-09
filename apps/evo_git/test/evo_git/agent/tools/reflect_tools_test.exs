@@ -388,7 +388,8 @@ defmodule EvoGit.Agent.Tools.ReflectToolsTest do
                  "run_command",
                  %{"command" => "ListRecentProjects.list_recent_projects"},
                  tmp_dir
-               ) == "Error: use elixir_eval exact-code approval path"
+               ) ==
+                 "Error: run_command is not available to agents; use the task-control tools or the dashboard."
       after
         Process.delete(:repo_less)
       end
@@ -420,7 +421,8 @@ defmodule EvoGit.Agent.Tools.ReflectToolsTest do
                  "run_command",
                  %{"command" => "SystemInfo.system_info"},
                  tmp_dir
-               ) == "Error: use elixir_eval exact-code approval path"
+               ) ==
+                 "Error: run_command is not available to agents; use the task-control tools or the dashboard."
       after
         Process.delete(:repo_less)
       end
@@ -470,7 +472,8 @@ defmodule EvoGit.Agent.Tools.ReflectToolsTest do
                  "run_command",
                  %{"command" => "ListTasks.list_tasks"},
                  tmp_dir
-               ) == "Error: use elixir_eval exact-code approval path"
+               ) ==
+                 "Error: run_command is not available to agents; use the task-control tools or the dashboard."
       after
         Process.delete(:repo_less)
       end

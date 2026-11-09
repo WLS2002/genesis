@@ -138,7 +138,7 @@ defmodule EvoGit.Agent.Runner do
     full_path = Path.join(repo_path, node_path)
 
     # Repo-less agents run without a git worktree (chatbot-style) — their
-    # repo_path points at the real Genesis source root or a placeholder binary
+    # repo_path is a runtime directory or a placeholder binary
     # (e.g. "[system]"), which is not a node directory, so the existence check
     # is skipped entirely (the placeholder dir would kill the agent before it
     # starts).
@@ -232,11 +232,12 @@ defmodule EvoGit.Agent.Runner do
       # Context Tree (from root to this agent's node) are available.
       # Skills are read from the agent's WORKTREE (`:repo_path`), not the real
       # repo root, so a skill an agent adds/edits is visible to it immediately
-      # and gets committed on its `evogit-agent-*` branch.
+      # and gets committed on its `evogit-agent-*` branch. Repo-less assistants
+      # only use their declared task-control/web tools.
       repo_root = Process.get(:genesis_repo_root)
 
       skill_schemas =
-        if repo_root && is_binary(repo_root) do
+        if not repo_less and is_binary(repo_root) do
           all_skills = EvoGit.Skills.load_skills(repo_path)
           skill_names = EvoGit.Skills.hierarchical_skill_names(node_path, repo_path)
 
@@ -327,10 +328,8 @@ defmodule EvoGit.Agent.Runner do
       # Repo-less ("system") mode: the agent runs WITHOUT a git worktree
       # (chatbot-style). WorktreeManager is never involved — it does not
       # monitor this agent, so there is no worktree to reclaim/prune on exit.
-      # The repo path is the real Genesis source root or a placeholder binary
-      # (e.g. "[system]"); git is never touched and files are never written
-      # (cardinal rule). Skills loading is gated on `is_binary`, so the
-      # placeholder is fine.
+      # The path is only a runtime working directory. Source context and
+      # project skills are not loaded for repo-less agents.
       repo_less_path = Keyword.get(ctx, :repo_less_repo_path) || repo_root
 
       Process.put(:repo_path, repo_less_path)

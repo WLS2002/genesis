@@ -527,6 +527,21 @@ defmodule EvoGit.Agent.ContextBuilderTest do
       assert block =~ "FAST"
     end
 
+    test "repo_less agents do not load the launch directory context" do
+      repo = temp_repo("# Root\nPRIVATE_SOURCE_CONTEXT\n", "# Docs\nPRIVATE_CHILD_CONTEXT\n")
+
+      block =
+        ContextBuilder.build_context_block(%{
+          repo_less: true,
+          repo_path: repo,
+          node_path: "./docs"
+        })
+
+      refute block =~ "PRIVATE_SOURCE_CONTEXT"
+      refute block =~ "PRIVATE_CHILD_CONTEXT"
+      assert block =~ "Current local time:"
+    end
+
     test "repo_less agents get no authority/quality sections even when requested" do
       repo = temp_repo("# Root\n", "# Docs\n")
 

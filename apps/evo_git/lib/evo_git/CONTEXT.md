@@ -7,8 +7,7 @@ This file is the module-level API surface plus the cross-cutting contracts; each
 
 ## Routing Table
 - `./agent/` → Agent behaviour, tool library, context compression, subagent processing, LLM error classification + retry/backoff policy, tool-name alias spine (`tool_names.ex`), completion protocol (`completion_protocol.ex`) + the completion side-effect writer (`completion.ex`).
-- `./agent/tools/elixir_eval/` → Genesis Assistant evaluator internals: explicit read/write MFA allowlists calling real runtime APIs with their actual returns, authenticated runtime-local capability broker, bounded evaluation/output and monitored worker cleanup; the single public tool wrapper is `./agent/tools/elixir_eval.ex`.
-- `./agents/` → SelfReflective exposes `elixir_eval` plus source-reading tools; evaluator tiers are explicit read/write/sudo, writes require exact-code approval, sudo additionally carries an unrestricted-privileges warning, and no tier auto-escalates.
+- `./agents/` → SelfReflective uses the shared task-control catalog and web tools, without source-tree access or evaluation.
 - `./agents/` → Agent implementations (Manager, Executor, TaskScheduler, Investigator, Architect, ContextExtractor, SkillExtractor, GenesisPlanner)
 - `./agent_scheduler/` → AgentState, SchedMeta, Slots, Worktrees, WorktreeManager — ETS schemas, helpers, worktree lifecycle
 - `./core/` → ContextNode, PhyloGraphNode, ForeignRepo data structures
@@ -43,7 +42,6 @@ Per-function detail (signatures, arities, return shapes) lives in the child CONT
 | `EvoGit.TaskRegistry` | task lifecycle (persistence, lease, PubSub, cancel/kill, reconciliation); `server/0` seam resolved at CALL time → `task_registry/` |
 | `EvoGit.Runtime` / `Runtime.Helpers` / `Runtime.SelfReflective` | `merge_and_report/3,4`, `load_foreign_repos/2`, `resolve_root_agent/2`, `notify_finalizing/1`; repo-less runtime → `runtime/` |
 | `EvoGit.CommandShell` / `CommandApproval` | CLI-compatible literal command registry plus human approval service; `request_eval/5` adds exact-code write/sudo metadata and `pending/0` exposes public pending maps → § Command approval and source-access boundaries. |
-| `EvoGit.Agent.Tools.ElixirEval` | Assistant-only dispatch-authorized read/write/sudo evaluator, fresh bindings, current-node targeting, bounded code/output/time and no automatic escalation → `agent/tools/elixir_eval/`. |
 | `EvoGit.QualityLevel` | `values/0`, `default/0` `"balanced"`, `normalize/1`, `guidance/1`; key added only when ≠ balanced → `task_registry/` |
 | `EvoGit.TaskTmpdir` | per-task scratch dir + event-driven reclaim → § Managed Per-Task Tmpdir |
 | `EvoGit.BackgroundJobs` | detached jobs (`start_job/1`, `read/2`, `list/1`, `snapshot/1`, `claim_finished_notices/1`, `kill/3`, `reap_under/1`); 10 LIVE/owner, 100 finished; `Process.monitor/1` on the owning AGENT pid → § Background Job Completion Notices |
@@ -198,8 +196,6 @@ Definition saves reject structurally malformed selections with `:invalid_model_s
 `PeakHours.effective_concurrency/2,3` intentionally consumes atom-keyed concurrency fields; `PeakHourEngine.effective_for_profile/3` translates canonical string-keyed account schedules before calling it, so that low-level shape alone is not an integration defect.
 
 ## Assistant direct runtime APIs (top-level wrapper contracts)
-The evaluator admits individual MFAs explicitly, never whole namespaces; the authoritative tier-specific lists live in `agent/tools/elixir_eval/CONTEXT.md`, and documenting neighboring APIs below does not grant access to them.
-Admitted reads return the real APIs' values without evaluator-specific projections or secret filtering, and approved writes call the real mutators.
 The read/write tiers guard against accidental self-corruption, not a malicious attacker; write requires exact-code tier-2 approval, while sudo requires separate explicit approval for unrestricted native evaluation.
 `TaskRegistry` synchronous client calls use a fixed 30_000 ms deadline and `server/0`'s CALL-TIME process-dictionary seam; no public wrapper catches an absent/restarting registry or caller timeout.
 `TaskRegistry.list_tasks_page/0,1` returns `%{rows: [summary_map], total: integer}`, while `list_tasks_paginated/0,1` returns `{[TaskInfo], total}` and `list_tasks/0` is an unbounded full-payload read; exact projection, option bounds and payload risks belong to `store/CONTEXT.md`.
@@ -213,7 +209,7 @@ The running-task graceful-cancel handler returns `:ok` even when scheduler notif
 `AgentScheduler.get_config/0,1`, `paused?/0`, `max_depth/0`, `get_llm_slot_status/0`, `pause/0`, `resume/0`, `update_config/1` and `send_user_message/2` use the implicit 5_000 ms GenServer deadline with no exit containment.
 `AgentScheduler.get_config/0` returns 16 keys including unredacted `llm_generation_params` and `model_profiles` but NOT `model_concurrency`; `get_config(:model_concurrency)` returns the live map, unknown atom keys return nil, and the full-map call also probes sandbox capabilities inside the scheduler.
 `AgentScheduler.task_id_for_agent/1` directly calls ETS lookup for integer ids without a missing-table guard despite its docstring; noninteger ids return nil, and current-agent/process-dictionary helpers do not identify an Assistant's owner from a fresh evaluator worker.
-Runtime APIs perform no human-approval checks themselves; the evaluator enforces explicit MFA admission and approval at its boundary, without replacing the APIs' return values or adding rollback.
+Runtime APIs are not an authorization boundary; the built-in assistant operates through the shared task-control catalog.
 Persistent configuration writes replace the whole user configuration and do not automatically reload it; use the resolved map as the basis for changes, preserve unrelated settings when updating/saving, and explicitly call the admitted reload API afterward (details: `config/CONTEXT.md`).
 
 ## Command approval and source-access boundaries
