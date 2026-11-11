@@ -77,8 +77,9 @@ defmodule EvoGit.Agent.Tools do
   @doc """
   Returns a list of all available tool schemas for ReqLLM.
 
-  Note: `elixir_eval` is dispatch-only and exposed by the reflective assistant's
-  own schema list, NEVER by either shared schema set. `run_command` is refused.
+  Note: `elixir_eval` remains dispatch-only for legacy reflective calls and
+  is not in either shared schema set. The task-control assistant advertises
+  `EvoGit.TaskControl.Tools`; `run_command` is refused.
   """
   def schemas do
     schemas =
@@ -327,6 +328,11 @@ defmodule EvoGit.Agent.Tools do
   # ElixirEval.execute/3 fully authorizes against the actual scheduler owner and
   # task lifecycle, including target_node, even if the name was hallucinated.
   # Schema membership and missing tool-task role flags NEVER grant this capability.
+  # Task control is shared by the assistant and MCP, independent of repo writes.
+  defp dispatch_tool_call("genesis_" <> _ = name, args, _repo_path, _repo_root, _node_path) do
+    EvoGit.Agent.Tools.GenesisTools.execute(name, args)
+  end
+
   defp dispatch_tool_call("elixir_eval", args, repo_path, repo_root, _node_path) do
     ElixirEval.execute(args, repo_path, repo_root)
   end
@@ -513,6 +519,8 @@ defmodule EvoGit.Agent.Tools do
   The evaluator's numeric `timeout_ms` is ONLY its inner engine cap;
   ToolDispatch separately floors write/sudo to the approval window plus 30s,
   even against an explicit outer `timeout`, still capped by max_tool_timeout.
+  `genesis_get_task` advertises 30_000 ms so its bounded 20-second
+  observation wait fits inside the outer dispatch.
   `job_list` / `job_kill` are fast registry calls and keep the generic default.
 
   The `job_output` ceiling is DERIVED on every call, never a compile-time
@@ -535,6 +543,7 @@ defmodule EvoGit.Agent.Tools do
       @shell_tool_name -> @shell_tool_default_timeout_ms
       "job_output" -> job_output_default_timeout_ms()
       "elixir_eval" -> 30_000
+      "genesis_get_task" -> 30_000
       _other -> nil
     end
   end
