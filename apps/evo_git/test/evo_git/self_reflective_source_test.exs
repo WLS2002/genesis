@@ -218,10 +218,10 @@ defmodule EvoGit.SelfReflectiveSourceTest do
       assert SelfReflective.source_root() == File.cwd!()
     end
 
-    test "Dispatch.resolve_agent_repo_root/2 mirrors the reference path" do
+    test "Dispatch.resolve_agent_repo_root/2 is independent of the source reference" do
       set_app_env(:self_reflective_source_root, "/tmp/from-app-env")
 
-      assert Dispatch.resolve_agent_repo_root(repo_less_spec(), %State{}) == "/tmp/from-app-env"
+      assert Dispatch.resolve_agent_repo_root(repo_less_spec(), %State{}) == File.cwd!()
     end
 
     test "Dispatch.resolve_agent_repo_root/2 returns a binary when all knobs are absent" do

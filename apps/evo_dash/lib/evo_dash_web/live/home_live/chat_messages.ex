@@ -24,17 +24,8 @@ defmodule EvoDashWeb.HomeLive.ChatMessages do
 
   alias EvoDashWeb.HomeLive.UserMessage
 
-  attr(:source_gate?, :boolean,
-    default: false,
-    doc:
-      "true when the Genesis-source gate blocks chatting — swaps the suggestion " <>
-        "chips for a short note pointing at the Download button"
-  )
-
   # Renders the empty state (no transcript entries yet): brand logo mark
-  # (light/dark variants), greeting, and the four suggestion chips —
-  # OR, when the Genesis-source gate blocks chatting, a short note instead of
-  # the chips (chips would only start a doomed `:reflect` task).
+  # (light/dark variants), greeting, and the four suggestion chips.
   def empty_state(assigns) do
     ~H"""
     <div class="min-h-full flex flex-col items-center justify-center gap-4 text-center px-4 py-8 sm:px-6">
@@ -48,44 +39,36 @@ defmodule EvoDashWeb.HomeLive.ChatMessages do
       <p class="max-w-md text-sm leading-relaxed text-base-content/70">
         <%!-- zh_CN: "开始对话" --%>{gettext("Start a conversation")}
       </p>
-      <%= if @source_gate? do %>
-        <p class="mt-4 max-w-md text-sm text-base-content/70">
-          <%!-- zh_CN: "请先下载 Genesis 源码后再开始对话" --%>{gettext(
-            "Download the Genesis source to start chatting."
-          )}
-        </p>
-      <% else %>
-        <div class="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-2xl">
-          <%!-- zh_CN: "显示我的运行中任务" --%>
-          <.suggestion_chip message={gettext("Show my running tasks")}>
-            <.icon
-              name="hero-light-bulb"
-              class="size-4 shrink-0 text-base-content/60 group-hover:text-base-content"
-            />
-          </.suggestion_chip>
-          <%!-- zh_CN: "检查系统状态与容量" --%>
-          <.suggestion_chip message={gettext("Check system status and capacity")}>
-            <.icon
-              name="hero-magnifying-glass"
-              class="size-4 shrink-0 text-base-content/60 group-hover:text-base-content"
-            />
-          </.suggestion_chip>
-          <%!-- zh_CN: "帮我启动一个任务" --%>
-          <.suggestion_chip message={gettext("Start a task for me")}>
-            <.icon
-              name="hero-puzzle-piece"
-              class="size-4 shrink-0 text-base-content/60 group-hover:text-base-content"
-            />
-          </.suggestion_chip>
-          <%!-- zh_CN: "解释任务是如何被调度的" --%>
-          <.suggestion_chip message={gettext("Explain how tasks are scheduled")}>
-            <.icon
-              name="hero-map"
-              class="size-4 shrink-0 text-base-content/60 group-hover:text-base-content"
-            />
-          </.suggestion_chip>
-        </div>
-      <% end %>
+      <div class="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-2xl">
+        <%!-- zh_CN: "显示我的运行中任务" --%>
+        <.suggestion_chip message={gettext("Show my running tasks")}>
+          <.icon
+            name="hero-light-bulb"
+            class="size-4 shrink-0 text-base-content/60 group-hover:text-base-content"
+          />
+        </.suggestion_chip>
+        <%!-- zh_CN: "检查系统状态与容量" --%>
+        <.suggestion_chip message={gettext("Check system status and capacity")}>
+          <.icon
+            name="hero-magnifying-glass"
+            class="size-4 shrink-0 text-base-content/60 group-hover:text-base-content"
+          />
+        </.suggestion_chip>
+        <%!-- zh_CN: "帮我启动一个任务" --%>
+        <.suggestion_chip message={gettext("Start a task for me")}>
+          <.icon
+            name="hero-puzzle-piece"
+            class="size-4 shrink-0 text-base-content/60 group-hover:text-base-content"
+          />
+        </.suggestion_chip>
+        <%!-- zh_CN: "解释任务是如何被调度的" --%>
+        <.suggestion_chip message={gettext("Explain how tasks are scheduled")}>
+          <.icon
+            name="hero-map"
+            class="size-4 shrink-0 text-base-content/60 group-hover:text-base-content"
+          />
+        </.suggestion_chip>
+      </div>
     </div>
     """
   end

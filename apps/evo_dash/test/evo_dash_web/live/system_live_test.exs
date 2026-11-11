@@ -1151,7 +1151,7 @@ defmodule EvoDashWeb.SystemLiveTest do
       assert assigns(view)[:source_card_visible] == true
       assert html =~ ~s(id="genesis-source-card")
       assert html =~ "Genesis Source"
-      assert html =~ "Genesis source checkout used by the self-reflective agent."
+      assert html =~ "Optional Genesis source reference for inspection tools."
       assert Floki.find(check_grid(html), ~s(div[id="genesis-source-card"])) != []
 
       # Not-cloned state: Clone only, no Update, no busy label.

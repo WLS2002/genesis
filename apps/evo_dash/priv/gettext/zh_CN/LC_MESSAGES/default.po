@@ -7073,3 +7073,7 @@ msgstr "槽位按服务商配置档案分池——同一配置档案下的模型
 #, elixir-autogen, elixir-format
 msgid "These are request vocabulary choices, not verified support for this model or endpoint. Select only levels you have confirmed."
 msgstr "这些仅为请求用语选项，并不表示此模型或端点已验证支持。请仅选择您已确认的级别。"
+
+#: lib/evo_dash_web/live/system_live/source_card.ex:95
+msgid "Optional Genesis source reference for inspection tools."
+msgstr "供检查工具使用的可选 Genesis 源码参考。"

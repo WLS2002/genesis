@@ -304,21 +304,10 @@ defmodule EvoDashWeb.HomeLiveRenderTest do
     refute Floki.text(dom) =~ "Genesis Assistant can make mistakes. Verify important information."
   end
 
-  test "known missing local source replaces suggestion actions with guidance and disables send" do
-    dom = page(source_available: false)
-
-    assert text(dom, "#chat-messages") =~ "Download the Genesis source to start chatting."
-    assert Floki.find(dom, "#chat-messages button[phx-click='send_message']") == []
-    assert Floki.find(dom, "button[phx-click='download_source']") != []
-    assert Floki.find(dom, "#chat-form textarea[disabled]") != []
-    assert Floki.find(dom, "#chat-form button[type='submit'][disabled]") != []
-    # Downloading the source does not prevent starting a fresh conversation.
-    assert Floki.find(dom, "button[phx-click='new_chat'][disabled]") == []
-  end
-
-  test "unknown availability and remote viewing do not falsely block the composer" do
+  test "legacy source availability values do not block the composer" do
     for overrides <- [
           [source_available: nil],
+          [source_available: false],
           [source_available: false, current_node: :remote@host]
         ] do
       dom = page(overrides)

@@ -197,7 +197,7 @@ defmodule EvoGit.AgentScheduler.DispatchTest do
       end
     end
 
-    test "prefers the :self_reflective_source_root app env when set" do
+    test "uses the runtime directory even when a source root is configured" do
       original = Application.get_env(:evo_git, :self_reflective_source_root)
       original_dir = Application.get_env(:evo_git, :self_reflective_source_dir)
 
@@ -219,7 +219,7 @@ defmodule EvoGit.AgentScheduler.DispatchTest do
             repo_less: true
           )
 
-        assert Dispatch.resolve_agent_repo_root(spec, %State{}) == "/tmp/fake-source"
+        assert Dispatch.resolve_agent_repo_root(spec, %State{}) == File.cwd!()
       after
         case original do
           nil -> Application.delete_env(:evo_git, :self_reflective_source_root)
@@ -233,7 +233,7 @@ defmodule EvoGit.AgentScheduler.DispatchTest do
       end
     end
 
-    test "falls back to the GENESIS_SOURCE_ROOT env var when the app env is absent" do
+    test "does not use GENESIS_SOURCE_ROOT as the assistant working directory" do
       original_app_env = Application.get_env(:evo_git, :self_reflective_source_root)
       original_sys_env = System.get_env("GENESIS_SOURCE_ROOT")
       original_dir = Application.get_env(:evo_git, :self_reflective_source_dir)
@@ -257,7 +257,7 @@ defmodule EvoGit.AgentScheduler.DispatchTest do
             repo_less: true
           )
 
-        assert Dispatch.resolve_agent_repo_root(spec, %State{}) == "/tmp/from-env"
+        assert Dispatch.resolve_agent_repo_root(spec, %State{}) == File.cwd!()
       after
         case original_app_env do
           nil -> Application.delete_env(:evo_git, :self_reflective_source_root)

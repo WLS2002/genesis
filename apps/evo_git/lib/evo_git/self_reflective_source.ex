@@ -1,14 +1,12 @@
 defmodule EvoGit.SelfReflectiveSource do
   @moduledoc """
-  Manages the local clone of the Genesis repository used by the self-reflective
-  (repo-less) agent.
+  Manages the optional local Genesis source reference used by source tooling
+  and the system settings UI.
 
-  The self-reflective agent reads the Genesis source/docs **read-only**. This
-  module owns a shallow managed clone at `<data_dir>/genesis-source`
-  (`source_dir/0`) and is the **single source of truth** for the source-root
-  resolution chain (`reference_path/0`) consumed by both
-  `EvoGit.Runtime.SelfReflective.source_root/0` and
-  `EvoGit.AgentScheduler.Dispatch.resolve_repo_less_root/0`.
+  This module owns a shallow managed clone at `<data_dir>/genesis-source`
+  (`source_dir/0`) and the source-root resolution chain (`reference_path/0`).
+  The task-control assistant no longer loads source context or requires this
+  clone. Existing source-reference tooling remains available.
 
   Public API (all pure local reads except `clone/0`/`update/0`, which touch
   the network via git):
@@ -162,9 +160,8 @@ defmodule EvoGit.SelfReflectiveSource do
     3. `source_dir/0` IF the dir exists AND is a valid Genesis checkout
        (git repo + `CONTEXT.md` at root) — auto-reference: cloning makes it
        the reference, no separate set-reference action
-    4. `nil` (callers supply their own terminal fallback — see
-       `EvoGit.Runtime.SelfReflective.source_root/0` for `File.cwd!()` and
-       `EvoGit.AgentScheduler.Dispatch` for `"[system]"`)
+    4. `nil` (legacy callers may supply their own fallback; the task-control
+       assistant no longer consumes this lookup)
 
   Never raises.
   """
@@ -186,10 +183,9 @@ defmodule EvoGit.SelfReflectiveSource do
   end
 
   @doc """
-  Whether a usable Genesis source is available to the self-reflective agent
-  RIGHT NOW.
+  Whether a usable optional Genesis source reference is available.
 
-  Resolves the SAME source root the agent will actually use —
+  Resolves the legacy source-root fallback —
   `reference_path() || File.cwd!()` (the terminal fallback mirrors
   `EvoGit.Runtime.SelfReflective.source_root/0`) — and validates it is a Genesis
   checkout: the dir exists AND carries a `CONTEXT.md` at its root (the same

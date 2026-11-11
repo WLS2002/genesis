@@ -9,8 +9,6 @@ defmodule EvoGit.Agent.ToolsTest do
 
   use ExUnit.Case, async: false
   alias EvoGit.Agent.Tools
-  alias EvoGit.Agent.Tools.ElixirEval
-  alias EvoGit.Agents.SelfReflective
   alias EvoGit.TestSupport.ConfigDir
 
   @moduletag :tmp_dir
@@ -98,58 +96,6 @@ defmodule EvoGit.Agent.ToolsTest do
           refute "run_command" in names
         end
       end)
-    end
-
-    test "SelfReflective exposes evaluation alongside separate source readers, not legacy commands" do
-      with_isolated_config(fn ->
-        schemas = SelfReflective.available_tools()
-        names = Enum.map(schemas, &EvoGit.Agent.tool_name/1)
-
-        assert Enum.find(schemas, &(&1.name == "elixir_eval")) == ElixirEval.schema()
-
-        for name <- ~w(read read_context list_dir rg glob search_context search_history web_fetch) do
-          assert name in names
-        end
-
-        # No shell/file writers or legacy per-handler tools: runtime mutation
-        # must use the evaluator's separately authorized exact-code route.
-        for old <- ~w(
-              run_command complete_task list_tasks get_task start_task cancel_task
-              force_kill_task delete_task guide_user subagent_investigator
-              list_projects system_info bash write edit create_files
-              make_dir write_context edit_context
-            ) do
-          refute old in names,
-                 "expected #{inspect(old)} to NOT be in SelfReflective.available_tools()"
-        end
-
-        assert length(names) == length(Enum.uniq(names))
-        assert SelfReflective.agent_type() == :read
-        assert SelfReflective.delegation_level() == :low
-        assert SelfReflective.subagent_modules() == []
-      end)
-    end
-
-    test "the persona embeds the evaluator catalog and explains the separate approval tiers" do
-      prompt = SelfReflective.system_prompt()
-
-      assert prompt =~ ElixirEval.help()
-      assert prompt =~ "`elixir_eval` is your one action tool"
-      assert prompt =~ "`tier` (`read`, `write`, or `sudo`; default `read`)"
-      assert prompt =~ "**Read tier:** Dune sandbox evaluation"
-      assert prompt =~ "**Write tier:** Dune sandbox evaluation"
-      assert prompt =~ "Dune sandbox evaluation"
-      assert prompt =~ "real `CommandApproval` approval of the exact code before execution"
-      assert prompt =~ "a conversational OK is not approval"
-      assert prompt =~ "sudo does not mean OS root"
-      assert prompt =~ "Never automatically escalate tiers"
-      assert prompt =~ "Evaluation targets only the current authenticated runtime node"
-
-      assert prompt =~
-               "`read`, `rg`, `glob`, `list_dir`, `read_context`, `search_context` (the CONTEXT.md tree) and `search_history`"
-
-      assert prompt =~ "A reply with no tool calls ends your run"
-      refute prompt =~ "run_command"
     end
 
     test "repo-less source inspection still dispatches through read, glob and rg", %{

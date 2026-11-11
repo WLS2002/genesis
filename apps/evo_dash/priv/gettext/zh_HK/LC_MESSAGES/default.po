@@ -7073,3 +7073,7 @@ msgstr "槽位以服務商設定檔為單位共用——同一設定檔下的模
 #, elixir-autogen, elixir-format
 msgid "These are request vocabulary choices, not verified support for this model or endpoint. Select only levels you have confirmed."
 msgstr "這些是請求用語選項，並不代表此模型或端點已驗證支援。請僅選取您已確認的層級。"
+
+#: lib/evo_dash_web/live/system_live/source_card.ex:95
+msgid "Optional Genesis source reference for inspection tools."
+msgstr "供檢查工具使用的可選 Genesis 原始碼參考。"

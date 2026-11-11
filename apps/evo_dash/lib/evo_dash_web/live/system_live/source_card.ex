@@ -92,7 +92,7 @@ defmodule EvoDashWeb.SystemLive.SourceCard do
 
       <div class="px-4 pb-4 text-sm flex-1 flex flex-col">
         <p class="text-xs text-base-content/60 mb-2">
-          {gettext("Genesis source checkout used by the self-reflective agent.")} <% # zh_CN: "自省智能体使用的 Genesis 源码检出目录" %>
+          {gettext("Optional Genesis source reference for inspection tools.")} <% # zh_CN: "供检查工具使用的可选 Genesis 源码参考" %>
         </p>
         <%= if @source_status_loading do %>
           <div class="flex items-center gap-3 py-1">

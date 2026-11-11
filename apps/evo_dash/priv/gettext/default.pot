@@ -7083,3 +7083,7 @@ msgstr ""
 #, elixir-autogen, elixir-format
 msgid "These are request vocabulary choices, not verified support for this model or endpoint. Select only levels you have confirmed."
 msgstr ""
+
+#: lib/evo_dash_web/live/system_live/source_card.ex:95
+msgid "Optional Genesis source reference for inspection tools."
+msgstr ""
