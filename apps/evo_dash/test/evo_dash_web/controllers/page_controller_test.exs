@@ -49,7 +49,7 @@ defmodule EvoDashWeb.PageControllerTest do
       |> Floki.text()
       |> String.trim()
 
-    assert heading == "Genesis Assistant"
+    assert heading == "Assistant"
   end
 
   # Regression: the sidebar "Active Tasks" hub (`EvoDash.ActiveTasks`) is a

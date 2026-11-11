@@ -17,6 +17,7 @@ defmodule EvoDashWeb.HomeLive.ChatStateTest do
     agent_message_count: nil,
     chat_task_status: nil,
     chat_node: nil,
+    workspace: nil,
     selected_model_id: nil,
     thought_process: []
   }
@@ -36,6 +37,7 @@ defmodule EvoDashWeb.HomeLive.ChatStateTest do
         agent_message_count: 3,
         chat_task_status: :running,
         chat_node: :node@host,
+        workspace: nil,
         selected_model_id: "profile-a",
         thought_process: [@thought_entry]
       }
@@ -68,6 +70,7 @@ defmodule EvoDashWeb.HomeLive.ChatStateTest do
         agent_message_count: 2,
         chat_task_status: :cancelling,
         chat_node: :node@host,
+        workspace: nil,
         selected_model_id: "profile-a",
         thought_process: [@thought_entry]
       }
@@ -91,6 +94,7 @@ defmodule EvoDashWeb.HomeLive.ChatStateTest do
                agent_message_count: -1,
                chat_task_status: :weird,
                chat_node: "not-an-atom",
+               workspace: nil,
                thought_process: "nope"
              }) == %{@default_state | chat_agent_id: "kept-as-is"}
     end

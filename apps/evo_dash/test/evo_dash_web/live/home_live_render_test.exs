@@ -34,7 +34,19 @@ defmodule EvoDashWeb.HomeLiveRenderTest do
       raw_entry_ids: MapSet.new(),
       pending_approvals: [],
       approval_error: nil,
-      chat_draft: ""
+      chat_draft: "",
+      workspace: "/work/project-a",
+      chat_id: 1,
+      workspace_open: false,
+      workspace_form: Phoenix.Component.to_form(%{"path" => ""}),
+      workspace_loading: false,
+      workspace_error: nil,
+      history_open: false,
+      sessions: [],
+      recent_projects: [
+        %{path: "/work/project-a", name: "Project A"},
+        %{path: "/work/project-b", name: "Project B"}
+      ]
     ]
 
     render_component(&EvoDashWeb.HomeLive.render/1, Keyword.merge(assigns, overrides))
@@ -239,86 +251,74 @@ defmodule EvoDashWeb.HomeLiveRenderTest do
     assert text(dom, "[role='alert']") =~ "Model selection is unavailable."
   end
 
-  test "empty chat offers actionable prompts inside the message scroller, not the composer" do
+  test "empty chat offers draft starters without starting tasks" do
     dom = page()
-
-    assert text(dom, "h1") == "Genesis Assistant"
-    assert text(dom, "#chat-messages h2") == "What would you like Genesis to do?"
-    prompts = Floki.find(dom, "#chat-messages button[phx-click='send_message']")
-    assert length(prompts) == 4
-
-    for prompt <- prompts do
-      assert [message] = Floki.attribute(prompt, "phx-value-message")
-      assert String.trim(Floki.text(prompt)) == message
-      assert message != ""
-    end
-
+    assert text(dom, "h1") == "Assistant"
+    assert Floki.find(dom, "#assistant-welcome") != []
+    prompts = Floki.find(dom, "#chat-messages button[phx-click='draft_suggestion']")
+    assert length(prompts) == 3
+    assert Floki.find(dom, "#chat-messages button[phx-click='send_message']") == []
     assert Floki.find(dom, "#chat-messages #chat-form") == []
     assert attr(dom, "#chat-messages", "phx-hook") == ["AgentHistoryAutoScroll"]
-    assert text(dom, "#chat-form button[type='submit']") == "Send"
-    assert Floki.text(dom) =~ "Genesis Assistant can make mistakes. Verify important information."
   end
 
-  test "idle composer preserves the draft and exposes keyboard and accessible send controls" do
+  test "composer preserves escaped drafts and delegates keyboard behavior to its hook" do
     dom = page(chat_draft: "Explain <this> & that")
-
+    assert text(dom, "#assistant-message") == "Explain &lt;this&gt; &amp; that"
+    assert attr(dom, "#chat-form", "phx-hook") == ["AssistantComposer"]
     assert attr(dom, "#chat-form", "phx-submit") == ["send_message"]
-    assert attr(dom, "#chat-form", "phx-change") == ["chat_input"]
-    assert attr(dom, "#chat-form textarea", "value") == ["Explain <this> & that"]
-    assert attr(dom, "#chat-form textarea", "name") == ["message"]
-    assert attr(dom, "#chat-form textarea", "aria-label") == ["Message Genesis Assistant…"]
-    assert attr(dom, "#chat-form textarea", "placeholder") == ["Message Genesis Assistant…"]
-    assert attr(dom, "#chat-form textarea", "phx-keydown") == ["chat_keydown"]
-    assert attr(dom, "#chat-form textarea", "phx-keyup") == ["chat_keyup"]
-
-    assert Floki.find(
-             dom,
-             "#chat-form textarea[disabled], #chat-form button[type='submit'][disabled]"
-           ) == []
-
-    assert Floki.find(dom, "#chat-form button[phx-click='stop'][disabled].hidden") != []
-    assert Floki.text(dom) =~ "Enter to send · Shift+Enter for a new line"
+    assert attr(dom, "#assistant-message", "phx-keydown") == []
+    assert attr(dom, "#assistant-message", "aria-label") == ["Message Genesis Assistant…"]
+    assert attr(dom, "#assistant-send", "aria-label") == ["Send"]
+    assert Floki.find(dom, "#assistant-message[disabled], #assistant-send[disabled]") == []
+    assert Floki.find(dom, "#assistant-stop[disabled].hidden") != []
   end
 
-  test "running chat replaces send with an accessible stop control and locks competing actions" do
+  test "running chat keeps the draft editable and replaces send with stop" do
     dom = page(chat_status: :running)
-
-    assert Floki.find(dom, "#chat-form textarea[disabled]") != []
-    assert Floki.find(dom, "#chat-form button[type='submit'][disabled].hidden") != []
-    assert text(dom, "#chat-form button[phx-click='stop']") == "Stop"
-    assert Floki.find(dom, "#chat-form button[phx-click='stop'][disabled]") == []
-    assert Floki.find(dom, "#chat-form button[phx-click='stop'].hidden") == []
-    assert Floki.find(dom, "button[phx-click='new_chat'][disabled]") != []
-    refute Floki.text(dom) =~ "Genesis Assistant can make mistakes. Verify important information."
+    assert Floki.find(dom, "#assistant-message[disabled]") == []
+    assert Floki.find(dom, "#assistant-send[disabled].hidden") != []
+    assert attr(dom, "#assistant-stop", "aria-label") == ["Stop"]
+    assert Floki.find(dom, "#assistant-stop[disabled], #assistant-stop.hidden") == []
+    assert Floki.find(dom, "[role='status']") != []
   end
 
-  test "a restored conversation replaces the greeting and prompts while keeping the composer available" do
+  test "restored conversation replaces the welcome surface" do
     dom = page(transcript: [%{id: "user-1", role: :user, text: "Explain the scheduler"}])
-
     assert text(dom, "#chat-messages") =~ "Explain the scheduler"
-    assert Floki.find(dom, "#chat-messages h2") == []
-    assert Floki.find(dom, "#chat-messages button[phx-click='send_message']") == []
-    assert Floki.find(dom, "#chat-form textarea[disabled]") == []
-    assert text(dom, "#chat-form button[type='submit']") == "Send"
-    assert Floki.text(dom) =~ "Enter to send · Shift+Enter for a new line"
-    refute Floki.text(dom) =~ "Genesis Assistant can make mistakes. Verify important information."
+    assert Floki.find(dom, "#assistant-welcome") == []
+    assert Floki.find(dom, "#assistant-message[disabled]") == []
   end
 
-  test "legacy source availability values do not block the composer" do
-    for overrides <- [
-          [source_available: nil],
-          [source_available: false],
-          [source_available: false, current_node: :remote@host]
-        ] do
-      dom = page(overrides)
+  test "source availability does not gate project conversations" do
+    dom = page(source_available: false)
+    assert Floki.find(dom, "#assistant-send[disabled]") == []
+    assert Floki.find(dom, "button[phx-click='download_source']") == []
+  end
 
-      assert length(Floki.find(dom, "#chat-messages button[phx-click='send_message']")) == 4
-      assert Floki.find(dom, "button[phx-click='download_source']") == []
+  test "no workspace allows drafting and offers an in-place project action" do
+    dom = page(workspace: nil)
+    assert Floki.find(dom, "#assistant-message[disabled]") == []
+    assert Floki.find(dom, "#assistant-send[disabled]") != []
+    assert attr(dom, "#assistant-project-toggle", "phx-click") == ["toggle_workspace"]
+    assert Floki.find(dom, "#assistant-shell a[href*='/projects']") == []
+  end
 
-      assert Floki.find(
-               dom,
-               "#chat-form textarea[disabled], #chat-form button[type='submit'][disabled]"
-             ) == []
-    end
+  test "selected workspace appears in the header and unlocks sending" do
+    dom = page(workspace: "/work/project-b")
+    assert text(dom, "#assistant-project-toggle") == "project-b"
+    assert Floki.find(dom, "#assistant-send[disabled]") == []
+  end
+
+  test "project selection stays inside the assistant" do
+    dom = page(workspace_open: true, current_node_id: "workstation")
+    assert Floki.find(dom, "#assistant-workspace-panel[role='dialog']") != []
+    assert attr(dom, "#assistant-open-project-form", "phx-submit") == ["open_workspace"]
+
+    assert length(
+             Floki.find(dom, "#assistant-workspace-panel button[phx-click='open_workspace']")
+           ) == 2
+
+    assert Floki.find(dom, "#assistant-open-project-form input[name='path']") != []
   end
 end

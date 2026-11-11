@@ -46,6 +46,7 @@ defmodule EvoDashWeb.HomeLive.ChatState do
       agent_message_count: assigns[:agent_message_count],
       chat_task_status: assigns[:chat_task_status],
       chat_node: assigns[:chat_node],
+      workspace: normalize_workspace(assigns[:workspace]),
       # Legacy migration input only; new submissions never emit :model_id.
       selected_model_id: assigns[:selected_model_id],
       thought_process: assigns[:thought_process] || []
@@ -68,6 +69,7 @@ defmodule EvoDashWeb.HomeLive.ChatState do
       agent_message_count: normalize_message_count(Map.get(state, :agent_message_count)),
       chat_task_status: normalize_task_status(Map.get(state, :chat_task_status)),
       chat_node: normalize_chat_node(Map.get(state, :chat_node)),
+      workspace: normalize_workspace(Map.get(state, :workspace)),
       selected_model_id: normalize_model_id(Map.get(state, :selected_model_id)),
       thought_process: normalize_thought_process(Map.get(state, :thought_process))
     }
@@ -190,6 +192,13 @@ defmodule EvoDashWeb.HomeLive.ChatState do
 
   defp normalize_chat_node(node) when is_atom(node), do: node
   defp normalize_chat_node(_node), do: nil
+
+  # The assistant's workspace directory is a plain absolute path or nil
+  # (nothing chosen yet — the composer is disabled in that state).
+  @doc "Normalizes a persisted workspace path; blank/malformed becomes nil."
+  @spec normalize_workspace(term()) :: String.t() | nil
+  def normalize_workspace(path) when is_binary(path) and path != "", do: path
+  def normalize_workspace(_path), do: nil
 
   @doc """
   Preserves a legacy profile id as migration input; blank/nil becomes nil

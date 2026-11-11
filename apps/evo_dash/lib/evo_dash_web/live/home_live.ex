@@ -53,8 +53,9 @@ defmodule EvoDashWeb.HomeLive do
 
   import EvoDashWeb.LLMSelectionComponents, only: [llm_selection: 1]
 
-  import EvoDashWeb.HomeLive.ChatMessages
+  import EvoDashWeb.HomeLive.ChatMessages, only: [message_list: 1]
   import EvoDashWeb.HomeLive.ApprovalCard
+  alias EvoDashWeb.HomeLive.{Surface, Workspace, SessionList}
 
   # Statuses that END a task (finalize the transcript + clear refs). All other
   # statuses mean the task is still alive: badge-only updates, refs kept.
@@ -75,46 +76,35 @@ defmodule EvoDashWeb.HomeLive do
       guide={@guide}
       accent_color={assigns[:accent_color] || "blue"}
     >
-      <div class="flex h-full min-h-0 w-full min-w-0 max-w-3xl flex-col mx-auto">
-        <!-- The header, answers and composer share one reading column. -->
-        <div
-          id="chat-header"
-          class="shrink-0 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-base-300 px-3 pt-3 pb-3 sm:px-4 sm:pt-4"
-        >
-          <div class="min-w-0 basis-full sm:basis-auto sm:flex-1">
-            <h1 class="text-base font-semibold truncate">
-              <%!-- zh_CN: Genesis Assistant 是此对话助手的名称 --%>{gettext(
-                "Genesis Assistant"
-              )}
-            </h1>
-          </div>
-          <button
-            type="button"
-            phx-click="new_chat"
-            disabled={@chat_status != :idle}
-            class="ml-auto inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-base-content/70 hover:bg-base-200 hover:text-base-content transition-colors focus-visible:outline-2 focus-visible:outline-primary-standalone disabled:opacity-40 disabled:pointer-events-none shrink-0"
-          >
-            <.icon name="hero-plus" class="size-4" />
-            <%!-- zh_CN: "新对话" --%>{gettext("New chat")}
-          </button>
-        </div>
-
-        <!-- Messages container (the AgentHistoryAutoScroll hook scrolls this element) -->
+      <section id="assistant-shell" class="assistant-shell">
+        <Surface.header
+          workspace={@workspace}
+          busy={@chat_status != :idle}
+          history_open={@history_open}
+          workspace_open={@workspace_open}
+        />
+        <Surface.workspace_panel
+          :if={@workspace_open}
+          projects={@recent_projects}
+          form={@workspace_form}
+          loading={@workspace_loading}
+          error={@workspace_error}
+        />
+        <Surface.history_panel :if={@history_open} sessions={@sessions} />
         <div
           id="chat-messages"
           phx-hook="AgentHistoryAutoScroll"
-          class="flex-1 min-h-0 min-w-0 overflow-y-auto overscroll-contain scrollbar-thin"
+          class="assistant-messages scrollbar-thin"
         >
-          <%= if @transcript == [] do %>
-            <.empty_state />
-          <% else %>
+          <Surface.welcome :if={@transcript == []} workspace={@workspace} />
+          <div :if={@transcript != []} class="assistant-transcript">
             <.message_list
               transcript={@transcript}
               chat_task_status={@chat_task_status}
               thought_process={@thought_process}
               raw_entry_ids={@raw_entry_ids}
             />
-          <% end %>
+          </div>
         </div>
 
         <!-- Pending evaluator and legacy command approvals block the reflect
@@ -169,91 +159,86 @@ defmodule EvoDashWeb.HomeLive do
           <% _ -> %>
         <% end %>
 
-        <!-- Composer: pinned bottom, outside the messages scroller. ONE form:
-             the textarea row, then a control bar holding the shared
-             provider/model/reasoning capsule on the left and Send/Stop on the
-             right (the /projects toolbar shape). `#chat-form` owns the
-             textarea's `chat_input` draft handler; the capsule needs NO form
-             owner (every control emits `phx-click` + `phx-value-*`, so its
-             selections never reach `chat_input`) and NO form may ever be
-             nested here. -->
-        <div class="shrink-0 px-3 pt-2 pb-3 sm:px-4 bg-base-100">
+        <div class="assistant-compose-area">
+          <div :if={@chat_status != :idle} class="assistant-run-status" role="status">
+            <span class="assistant-status-dot"></span>
+            <span>{if @chat_status == :cancelling,
+              do: gettext("Stopping…"),
+              else: gettext("Working on your request")}</span>
+            <span class="assistant-status-hint">{gettext("You can draft your next message below.")}</span>
+          </div>
+          <div class="assistant-composer">
+            <.form
+              for={to_form(%{"message" => @chat_draft})}
+              id="chat-form"
+              phx-hook="AssistantComposer"
+              phx-submit="send_message"
+              phx-change="chat_input"
+              data-chat-id={@chat_id}
+              data-scope={@current_node_id || "local"}
+              data-busy={to_string(@chat_status != :idle)}
+              data-draft={@chat_draft}
+            >
+              <input id="assistant-submission" type="hidden" name="composer_submission" value="" />
+              <textarea
+                id="assistant-message"
+                name="message"
+                rows="2"
+                phx-debounce="200"
+                aria-label={gettext("Message Genesis Assistant…")}
+                placeholder={gettext("Describe what you want to build or change…")}
+              >{@chat_draft}</textarea>
+              <div id="chat-composer-controls" class="assistant-composer-actions">
+                <.llm_selection
+                  id="chat-llm-selection"
+                  provider_profiles={@provider_profiles}
+                  model_selections={@model_selections}
+                  model_spec={@model_spec || %{}}
+                  show_auto_option={@model_selection_enabled}
+                  disabled={@model_select_loading or is_nil(@model_snapshot) or @chat_status != :idle}
+                  compact
+                  class="min-w-0"
+                />
+                <div class="assistant-submit-actions">
+                  <span class="assistant-enter-hint" aria-hidden="true">{gettext("Enter to send")}</span>
+                  <button
+                    id="assistant-send"
+                    type="submit"
+                    disabled={
+                      @chat_status != :idle or is_nil(@workspace) or is_nil(@model_snapshot) or
+                        not is_nil(@model_selection_error)
+                    }
+                    class={["assistant-send-button", @chat_status != :idle && "hidden"]}
+                    aria-label={gettext("Send")}
+                    title={gettext("Send")}
+                  ><.icon name="hero-arrow-up" class="size-5" /></button>
+                  <button
+                    id="assistant-stop"
+                    type="button"
+                    phx-click="stop"
+                    disabled={@chat_status != :running}
+                    class={["assistant-stop-button", @chat_status == :idle && "hidden"]}
+                    aria-label={gettext("Stop")}
+                    title={gettext("Stop")}
+                  ><.icon name="hero-stop" class="size-4" /></button>
+                </div>
+              </div>
+            </.form>
+          </div>
           <p
             :if={@model_select_load_error || @model_selection_error}
+            class="assistant-field-error"
             role="alert"
-            class="mb-1.5 text-xs text-error"
           >
             {gettext("Model selection is unavailable. Choose a valid model or reconnect to the node.")}
           </p>
-          <form
-            id="chat-form"
-            phx-submit="send_message"
-            phx-change="chat_input"
-            class="help-composer flex flex-col gap-1 rounded-2xl p-1"
-          >
-            <textarea
-              name="message"
-              value={@chat_draft}
-              phx-keydown="chat_keydown"
-              phx-keyup="chat_keyup"
-              disabled={@chat_status != :idle}
-              placeholder={gettext("Message Genesis Assistant…")}
-              rows="1"
-              aria-label={gettext("Message Genesis Assistant…")}
-              class="w-full min-w-0 min-h-[46px] max-h-[min(10rem,25dvh)] resize-y bg-transparent px-4 py-3 text-base leading-relaxed placeholder:text-base-content/50 focus:outline-none disabled:opacity-50"
-            ></textarea>
-            <!-- Composer control bar: picker left, send/stop right. -->
-            <div id="chat-composer-controls" class="help-composer-controls">
-              <.llm_selection
-                id="chat-llm-selection"
-                provider_profiles={@provider_profiles}
-                model_selections={@model_selections}
-                model_spec={@model_spec || %{}}
-                show_auto_option={@model_selection_enabled}
-                disabled={@model_select_loading or is_nil(@model_snapshot)}
-                compact
-                class="min-w-0"
-              />
-              <div class="ml-auto flex shrink-0 items-center gap-2">
-                <!-- Send → Stop morph: exactly one button is visible at a time; both
-                     stay in the DOM (the hidden one disabled) so the Stop button's
-                     presence/disabled state remains assertable on idle. -->
-                <button
-                  type="submit"
-                  disabled={
-                    @chat_status != :idle or
-                      is_nil(@model_snapshot) or not is_nil(@model_selection_error)
-                  }
-                  class={"help-send-btn flex size-9 shrink-0 items-center justify-center rounded-full bg-primary text-primary-content transition hover:opacity-90 active:scale-95 disabled:opacity-40 disabled:pointer-events-none " <> if(@chat_status == :running, do: "hidden", else: "")}
-                >
-                  <.icon name="hero-paper-airplane" class="size-4" />
-                  <span class="sr-only"><%!-- zh_CN: "发送" --%>{gettext("Send")}</span>
-                </button>
-                <button
-                  type="button"
-                  phx-click="stop"
-                  disabled={@chat_status != :running}
-                  class={"flex size-9 shrink-0 items-center justify-center rounded-full bg-base-content text-base-100 transition hover:opacity-90 active:scale-95 disabled:opacity-40 disabled:pointer-events-none " <> if(@chat_status != :running, do: "hidden", else: "")}
-                >
-                  <.icon name="hero-stop" class="size-4" />
-                  <span class="sr-only"><%!-- zh_CN: "停止" --%>{gettext("Stop")}</span>
-                </button>
-              </div>
-            </div>
-          </form>
-          <div class="mt-1.5 text-center text-xs text-base-content/60">
-            <%!-- zh_CN: "回车发送 · Shift+回车换行" --%>{gettext(
-              "Enter to send · Shift+Enter for a new line"
-            )}
-            <%= if @chat_status == :idle and @transcript == [] do %>
-              <br />
-              <%!-- zh_CN: Genesis Assistant 可能会出错，请核实重要信息。 --%>{gettext(
-                "Genesis Assistant can make mistakes. Verify important information."
-              )}
-            <% end %>
+          <div class="assistant-compose-caption">
+            <span>{if is_nil(@workspace),
+              do: gettext("Choose a project before sending."),
+              else: gettext("Shift + Enter for a new line")}</span>
           </div>
         </div>
-      </div>
+      </section>
     </EvoDashWeb.Layouts.app>
     """
   end
@@ -338,7 +323,21 @@ defmodule EvoDashWeb.HomeLive do
       # NEVER run in the LiveView process — see assign_model_select/1). Monotonic
       # and never reset (a reset could make an older in-flight result apply).
       model_select_seq: 0,
-      current_path: ~p"/help"
+      current_path: ~p"/help",
+      # Assistant workspace gate: chatting requires an explicitly chosen
+      # workspace. `recent_projects` is loaded node-aware OFF the LiveView
+      # process (see assign_recent_projects/1); `workspace` is the chosen
+      # absolute path (persisted per chat via ChatState) or nil.
+      workspace: nil,
+      recent_projects: [],
+      recent_projects_seq: 0,
+      workspace_open: false,
+      workspace_loading: false,
+      workspace_error: nil,
+      workspace_form: to_form(%{"path" => ""}),
+      workspace_request_seq: 0,
+      history_open: false,
+      sessions: []
     }
   end
 
@@ -512,7 +511,7 @@ defmodule EvoDashWeb.HomeLive do
     socket =
       cond do
         node_changed or chat_node_mismatch or selection_scope_mismatch ->
-          start_new_chat(socket)
+          socket |> assign(workspace: nil) |> start_new_chat()
 
         true ->
           socket
@@ -523,16 +522,134 @@ defmodule EvoDashWeb.HomeLive do
     socket =
       socket
       |> assign_model_select()
+      |> assign_recent_projects()
       |> assign(current_path: ~p"/help")
       # Subscriptions and restoration are complete, and the viewed node is
       # resolved. This also reconciles reconnects routed here by NodeAware.
       |> maybe_recover_approvals()
+      |> refresh_sessions()
+      |> assign(
+        workspace_open: false,
+        workspace_loading: false,
+        workspace_request_seq: socket.assigns.workspace_request_seq + 1,
+        history_open: false
+      )
 
     {:noreply, socket}
   end
 
   @impl true
-  def handle_event("send_message", %{"message" => text}, socket), do: send_chat(socket, text)
+  def handle_event("toggle_workspace", _params, socket) do
+    if socket.assigns.chat_status == :idle do
+      if socket.assigns.workspace_open do
+        {:noreply, close_workspace(socket)}
+      else
+        {:noreply,
+         assign(socket,
+           workspace_open: true,
+           history_open: false,
+           workspace_error: nil
+         )}
+      end
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("close_workspace", _, socket),
+    do: {:noreply, close_workspace(socket)}
+
+  def handle_event("close_history", _, socket),
+    do: {:noreply, assign(socket, history_open: false)}
+
+  def handle_event("dismiss_panels", _, socket),
+    do: {:noreply, socket |> close_workspace() |> assign(history_open: false)}
+
+  def handle_event("toggle_history", _, socket),
+    do:
+      {:noreply,
+       socket
+       |> close_workspace()
+       |> refresh_sessions()
+       |> assign(
+         history_open: not socket.assigns.history_open,
+         workspace_open: false
+       )}
+
+  def handle_event("draft_suggestion", %{"kind" => kind}, socket) do
+    text =
+      case kind do
+        "explore" -> gettext("Help me understand this project and identify where to start.")
+        "plan" -> gettext("I want to make a change to this project. Help me work out a plan.")
+        "tasks" -> gettext("Show my running tasks and summarize their progress.")
+        _ -> ""
+      end
+
+    {:noreply,
+     socket
+     |> assign(chat_draft: text)
+     |> persist_state()
+     |> push_event("assistant:draft", %{chat_id: socket.assigns.chat_id, text: text})}
+  end
+
+  def handle_event("open_workspace", %{"path" => path}, socket) do
+    if socket.assigns.chat_status != :idle or pending_remote?(socket) do
+      {:noreply,
+       assign(socket,
+         workspace_error: gettext("Connect to the selected machine before opening a project.")
+       )}
+    else
+      scope = selection_scope(socket)
+      {target_id, target_node} = scope
+      seq = socket.assigns.workspace_request_seq + 1
+      owner = self()
+      chat_id = socket.assigns.chat_id
+
+      Task.Supervisor.start_child(EvoDash.TaskSupervisor, fn ->
+        result = Workspace.open(target_id, target_node, path)
+        send(owner, {:assistant_workspace_opened, scope, seq, chat_id, result})
+      end)
+
+      {:noreply,
+       assign(socket,
+         workspace_loading: true,
+         workspace_error: nil,
+         workspace_request_seq: seq,
+         workspace_form: to_form(%{"path" => path})
+       )}
+    end
+  end
+
+  def handle_event("switch_chat", %{"id" => id}, socket) do
+    sessions = SessionList.entries(socket.assigns.chat_id, selection_scope(socket))
+
+    chosen = Enum.find(sessions, &(to_string(&1.id) == to_string(id)))
+
+    if socket.assigns.chat_status == :idle and chosen do
+      socket = persist_state(socket)
+      EvoDash.ChatHistory.set_current_chat(chosen.id)
+      socket = socket |> close_workspace() |> reset_chat() |> attach_chat()
+      saved = socket.assigns.model_selection_restore || %{}
+
+      socket =
+        socket
+        |> assign(ChatState.restore_selection(saved, selection_scope(socket)))
+        |> assign(model_selection_restore: nil, history_open: false, workspace_open: false)
+        |> assign_model_select()
+        |> refresh_sessions()
+        |> maybe_recover_approvals()
+
+      {:noreply, socket}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  @impl true
+  def handle_event("send_message", %{"message" => text} = params, socket) do
+    socket = assign(socket, composer_submission: Map.get(params, "composer_submission"))
+    send_chat(socket, text)
+  end
 
   @impl true
   def handle_event("send_message", _params, socket),
@@ -540,7 +657,7 @@ defmodule EvoDashWeb.HomeLive do
 
   @impl true
   def handle_event("chat_input", %{"message" => text}, socket) do
-    {:noreply, assign(socket, chat_draft: text || "")}
+    {:noreply, socket |> assign(chat_draft: text || "") |> persist_state()}
   end
 
   @impl true
@@ -885,6 +1002,24 @@ defmodule EvoDashWeb.HomeLive do
     end
   end
 
+  # Async, node-aware recent-projects load for the workspace selector.
+  # Applies only when the viewed node AND the monotonic sequence still match.
+  def handle_info({{:recent_projects_loaded, seq, target_node}, result}, socket) do
+    if not pending_remote?(socket) and
+         target_node == (socket.assigns[:current_node] || node()) and
+         seq == socket.assigns[:recent_projects_seq] do
+      projects =
+        case result do
+          {:ok, list} -> normalize_projects(list)
+          _other -> []
+        end
+
+      {:noreply, assign(socket, recent_projects: projects)}
+    else
+      {:noreply, socket}
+    end
+  end
+
   @impl true
   def handle_info({:node_selected, node_id}, socket) do
     NodeAware.handle_node_selected(socket, node_id)
@@ -893,6 +1028,34 @@ defmodule EvoDashWeb.HomeLive do
   @impl true
   def handle_info({:remote_connection_status, target_id, status}, socket) do
     NodeAware.handle_connection_status(socket, {:remote_connection_status, target_id, status})
+  end
+
+  @impl true
+  def handle_info({:assistant_workspace_opened, scope, seq, chat_id, result}, socket) do
+    if scope == selection_scope(socket) and seq == socket.assigns.workspace_request_seq and
+         chat_id == socket.assigns.chat_id do
+      socket =
+        case result do
+          {:ok, path, projects} ->
+            socket
+            |> assign(
+              workspace: path,
+              recent_projects: normalize_projects(projects),
+              workspace_loading: false,
+              workspace_open: false,
+              workspace_error: nil
+            )
+            |> persist_state()
+            |> push_event("assistant:focus", %{chat_id: socket.assigns.chat_id})
+
+          {:error, message} ->
+            assign(socket, workspace_loading: false, workspace_error: message)
+        end
+
+      {:noreply, socket}
+    else
+      {:noreply, socket}
+    end
   end
 
   @impl true
@@ -914,6 +1077,10 @@ defmodule EvoDashWeb.HomeLive do
            gettext("Connect to the remote node before sending a message.")
          )}
 
+      is_nil(socket.assigns[:workspace]) ->
+        {:noreply,
+         put_flash(socket, :error, gettext("Select a workspace before sending a message."))}
+
       true ->
         do_send_chat(socket, text)
     end
@@ -921,7 +1088,7 @@ defmodule EvoDashWeb.HomeLive do
 
   defp do_send_chat(socket, text) do
     if socket.assigns[:chat_status] != :idle do
-      # Defensive — the input is disabled while running anyway.
+      # A running turn accepts drafts but cannot submit another turn.
       {:noreply, socket}
     else
       text = String.trim(text || "")
@@ -929,11 +1096,17 @@ defmodule EvoDashWeb.HomeLive do
       if text == "" do
         {:noreply, socket}
       else
-        objective =
+        preamble =
           case Transcript.build_preamble(socket.assigns[:transcript]) do
-            {:ok, preamble} -> preamble <> "New message: " <> text
-            :empty -> text
+            {:ok, preamble} -> preamble
+            :empty -> ""
           end
+
+        # The workspace block goes FIRST so the agent always knows which
+        # directory the conversation is about.
+        objective =
+          "## Workspace\npath: " <>
+            to_string(socket.assigns[:workspace]) <> "\n\n" <> preamble <> "New message: " <> text
 
         # Validate before touching the transcript/draft. A missing, stale or
         # wrong-node snapshot must not create a bubble or silently submit Auto.
@@ -1001,7 +1174,12 @@ defmodule EvoDashWeb.HomeLive do
               |> async_lookup_agent()
               |> maybe_recover_approvals()
 
-            {:noreply, socket}
+            {:noreply,
+             push_event(socket, "assistant:sent", %{
+               chat_id: socket.assigns.chat_id,
+               text: text,
+               submission_id: socket.assigns[:composer_submission]
+             })}
 
           {:error, :no_task_id} ->
             socket =
@@ -1312,8 +1490,8 @@ defmodule EvoDashWeb.HomeLive do
     if connected?(socket), do: ApprovalWorkflow.recover(socket), else: socket
   end
 
-  # Starts a NEW persisted chat (old chats stay in ChatHistory — there is no
-  # chat-switching UI yet) and resets all live chat state, persisting the
+  # Starts a NEW persisted chat (old chats stay in ChatHistory and can be
+  # restored from the history panel) and resets all live chat state, persisting the
   # fresh empty state. The store mutation is connected-only: a dead-render
   # handle_params with `?node=` must not create a chat per HTTP request.
   # Prune cap: keep the newest 10 chats (bounded memory).
@@ -1329,6 +1507,8 @@ defmodule EvoDashWeb.HomeLive do
 
     socket
     |> reset_chat()
+    |> close_workspace()
+    |> assign(history_open: false)
     |> persist_state()
   end
 
@@ -1378,13 +1558,72 @@ defmodule EvoDashWeb.HomeLive do
   # (no chat attached yet). Persist points: send, stop, every task/agent
   # status event, the async lookup/history/task results, finalize paths, New
   # chat, and node switches. The `chat_input` draft is NOT persisted per
-  # keystroke (documented choice).
+  # browser keystroke; debounced changes persist the current draft.
   defp persist_state(socket) do
     if connected?(socket) and socket.assigns[:chat_id] != nil do
       EvoDash.ChatHistory.put_state(socket.assigns[:chat_id], ChatState.build(socket.assigns))
     end
 
     socket
+  end
+
+  # Loads the viewed node's recent projects for the workspace selector, OFF the
+  # LiveView process (a remote node answers via `:erpc`). Bumps the monotonic
+  # `:recent_projects_seq` guard first; a failed load degrades to `[]` (the
+  # in-place directory control remains available).
+  defp assign_recent_projects(socket) do
+    target_node = socket.assigns[:current_node] || node()
+    seq = socket.assigns[:recent_projects_seq] + 1
+    socket = assign(socket, recent_projects_seq: seq, recent_projects: [])
+
+    if connected?(socket) and not pending_remote?(socket) do
+      case EvoDash.SafeCall.start(self(), {:recent_projects_loaded, seq, target_node}, fn ->
+             EvoDash.NodeContext.projects(target_node)
+           end) do
+        {:ok, _pid} -> socket
+        {:error, _reason} -> assign(socket, recent_projects: [])
+      end
+    else
+      socket
+    end
+  end
+
+  # Normalizes both struct and string-keyed map projections into
+  # `%{path: binary, name: binary}`; malformed entries are dropped.
+  defp normalize_projects(projects) when is_list(projects) do
+    projects
+    |> Enum.map(fn
+      %{path: path} = project when is_binary(path) ->
+        %{path: path, name: project_name(project) || path}
+
+      %{"path" => path} = project when is_binary(path) ->
+        %{path: path, name: project_name(project) || path}
+
+      _other ->
+        nil
+    end)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp normalize_projects(_projects), do: []
+
+  defp project_name(project) do
+    case Map.get(project, :name) || Map.get(project, "name") do
+      name when is_binary(name) and name != "" -> name
+      _other -> nil
+    end
+  end
+
+  defp close_workspace(socket) do
+    assign(socket,
+      workspace_open: false,
+      workspace_loading: false,
+      workspace_request_seq: socket.assigns.workspace_request_seq + 1
+    )
+  end
+
+  defp refresh_sessions(socket) do
+    assign(socket, sessions: SessionList.entries(socket.assigns.chat_id, selection_scope(socket)))
   end
 
   # Stale-guard for async chat fetches: the result applies only when the node

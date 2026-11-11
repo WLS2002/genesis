@@ -63,6 +63,7 @@ import "../vendor/highlight-scheme.min.js"
 import SidebarCollapse from "./hooks/sidebar_collapse.js"
 import NodeSwitchFade from "./hooks/node_switch_fade.js"
 import AdaptiveInput from "./hooks/adaptive_input.js"
+import AssistantComposer from "./hooks/assistant_composer.js"
 import LegendTooltip from "./hooks/legend_tooltip.js"
 import DiffViewer from "./hooks/diff_viewer.js"
 import CommitGraph from "./hooks/commit_graph.js"
@@ -1236,7 +1237,7 @@ const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute
 const liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
   params: {_csrf_token: csrfToken, guide_client_id: guideClientId},
-  hooks: {...colocatedHooks, TauriDetect, DesktopQuit, DesktopQuitConfirm, UpdateStatus, PlatformDetect, PathAutocomplete, DirectoryPicker, FilePicker, Guide, StatePersistence, BrowserNotifications, AutoClearFlash, ClipboardCopy, AgentHistoryAutoScroll, DialogModal, SidebarCollapse, NodeSwitchFade, AdaptiveInput, LegendTooltip, FocusInput, PaletteList, DiffViewer, CommitGraph, CapsulePanel},
+  hooks: {...colocatedHooks, TauriDetect, DesktopQuit, DesktopQuitConfirm, UpdateStatus, PlatformDetect, PathAutocomplete, DirectoryPicker, FilePicker, Guide, StatePersistence, BrowserNotifications, AutoClearFlash, ClipboardCopy, AgentHistoryAutoScroll, DialogModal, SidebarCollapse, NodeSwitchFade, AdaptiveInput, AssistantComposer, LegendTooltip, FocusInput, PaletteList, DiffViewer, CommitGraph, CapsulePanel},
 })
 
 // Show progress bar on live navigation and form submits

@@ -409,12 +409,27 @@ defmodule EvoDashWeb.HomeLiveTest do
   # :evogit_agent_state rows).
   defp real_context, do: ReqLLM.Context.new(real_history())
 
+  # Chat lifecycle cases seed a selected project; WorkspaceTest exercises
+  # filesystem validation and project mounting through the public node API.
+  @test_workspace "/tmp/genesis-assistant-workspace"
+  defp select_workspace(view, path \\ @test_workspace) do
+    :sys.replace_state(view.pid, fn state ->
+      %{state | socket: Phoenix.Component.assign(state.socket, :workspace, path)}
+    end)
+
+    render_change(view, "chat_input", %{"message" => assigns(view).chat_draft})
+  end
+
+  defp workspace_objective(text, path \\ @test_workspace),
+    do: "## Workspace\npath: " <> path <> "\n\nNew message: " <> text
+
   describe "render" do
     test "renders the idle chat page", %{conn: conn} do
-      {:ok, _view, html} = live(conn, "/help")
+      {:ok, view, _html} = live(conn, "/help")
+      html = select_workspace(view)
 
-      assert page_heading(html) == "Genesis Assistant"
-      assert html =~ "Start a conversation"
+      assert page_heading(html) == "Assistant"
+      assert html =~ "What shall we build next?"
 
       # The message input and Send button are present and ENABLED on idle
       # (chat_status == :idle → disabled={false} → attribute omitted).
@@ -431,25 +446,17 @@ defmodule EvoDashWeb.HomeLiveTest do
       assert disabled?(html, ~s(button[phx-click="stop"]))
     end
 
-    test "empty state renders the greeting and four operator suggestion chips", %{conn: conn} do
-      {:ok, _view, html} = live(conn, "/help")
+    test "empty state offers three starters that prepare a draft", %{conn: conn} do
+      {:ok, view, _html} = live(conn, "/help")
+      select_workspace(view)
+      assert has_element?(view, "#assistant-welcome")
 
-      # ChatGPT-style empty state: greeting + 4 suggestion chips, each wired to
-      # the send_message event with its message text as the phx-value (so
-      # clicking a chip submits it through the existing handle_event clause).
-      assert html =~ "What would you like Genesis to do?"
-
-      chips =
-        html
-        |> Floki.parse_document!()
-        |> Floki.find(~s(button[phx-click="send_message"][phx-value-message]))
-
-      assert length(chips) == 4
-
-      assert html =~ ~s(phx-value-message="Show my running tasks")
-      assert html =~ ~s(phx-value-message="Check system status and capacity")
-      assert html =~ ~s(phx-value-message="Start a task for me")
-      assert html =~ ~s(phx-value-message="Explain how tasks are scheduled")
+      for kind <- ["explore", "plan", "tasks"] do
+        view |> element("button[phx-value-kind='#{kind}']") |> render_click()
+        assert assigns(view).chat_draft != ""
+        assert assigns(view).chat_status == :idle
+        assert assigns(view).transcript == []
+      end
     end
   end
 
@@ -488,6 +495,7 @@ defmodule EvoDashWeb.HomeLiveTest do
     # asynchronous error log is captured rather than printed between tests.
     test "starts a reflect task with the right opts and tracks it synchronously", %{conn: conn} do
       {:ok, view, _html} = live(conn, "/help")
+      select_workspace(view)
 
       # The wrapper's `SelfReflective failed: ...` error log is emitted
       # ASYNCHRONOUSLY at task end, so the submit + the await of the row's
@@ -518,7 +526,10 @@ defmodule EvoDashWeb.HomeLiveTest do
       assert length(reflect) == 1
       task = hd(reflect)
       assert opt(task, :mode) == "reflect"
-      assert opt(task, :objective) == "hello genesis"
+
+      assert opt(task, :objective) ==
+               "## Workspace\npath: " <> @test_workspace <> "\n\nNew message: hello genesis"
+
       assert opt(task, :path) == nil
       refute has_opt?(task, :path)
       refute has_opt?(task, "path")
@@ -540,6 +551,7 @@ defmodule EvoDashWeb.HomeLiveTest do
 
     test "second message carries the transcript preamble", %{conn: conn} do
       {:ok, view, _html} = live(conn, "/help")
+      select_workspace(view)
 
       # Establish the transcript deterministically via :sys.replace_state (the
       # real reflect-task lifecycle is async and out of scope — see the
@@ -578,7 +590,10 @@ defmodule EvoDashWeb.HomeLiveTest do
         |> Enum.filter(&(&1.type == :reflect))
 
       assert opt(task, :objective) ==
-               "Previous conversation:\nUser: hello\nNew message: what is genesis?"
+               "## Workspace\npath: " <>
+                 @test_workspace <>
+                 "\n\n" <>
+                 "Previous conversation:\nUser: hello\nNew message: what is genesis?"
 
       cleanup_task_on_exit(task.id)
     end
@@ -588,13 +603,14 @@ defmodule EvoDashWeb.HomeLiveTest do
       fixture_id = insert_task_fixture!(opts: [path: "/tmp/test", objective: "fixture"])
 
       {:ok, view, _html} = live(conn, "/help")
+      select_workspace(view)
 
       html = render_submit(view, "send_message", %{"message" => "   "})
 
       # No optimistic bubbles, no task, still idle.
       assert assigns(view).chat_status == :idle
       assert assigns(view).chat_task_id == nil
-      assert html =~ "Start a conversation"
+      assert html =~ "What shall we build next?"
       assert EvoGit.TaskRegistry.get_task(fixture_id) != nil
       assert length(EvoGit.Store.safe_select_all_tasks(EvoGit.Store)) == 1
     end
@@ -640,6 +656,7 @@ defmodule EvoDashWeb.HomeLiveTest do
   describe "new chat" do
     test "resets the chat to the idle empty state", %{conn: conn} do
       {:ok, view, _html} = live(conn, "/help")
+      select_workspace(view)
 
       # Synthetic running chat (seed + terminal event) — the real reflect
       # runtime must never run in this suite (see the setup's fail-fast
@@ -654,7 +671,7 @@ defmodule EvoDashWeb.HomeLiveTest do
       assert assigns(view).chat_status == :idle
 
       html = render_click(view, "new_chat", %{})
-      assert html =~ "Start a conversation"
+      assert html =~ "What shall we build next?"
       assert assigns(view).chat_status == :idle
       assert assigns(view).chat_task_id == nil
       refute disabled?(html, ~s(button[type="submit"]))
@@ -662,6 +679,7 @@ defmodule EvoDashWeb.HomeLiveTest do
 
     test "starts a fresh persisted chat and keeps the old one in the store", %{conn: conn} do
       {:ok, view, _html} = live(conn, "/help")
+      select_workspace(view)
       old_id = assigns(view).chat_id
       assert old_id != nil
 
@@ -681,7 +699,7 @@ defmodule EvoDashWeb.HomeLiveTest do
       new_id = assigns(view).chat_id
 
       assert new_id != nil and new_id != old_id
-      assert html =~ "Start a conversation"
+      assert html =~ "What shall we build next?"
       assert assigns(view).transcript == []
       assert assigns(view).chat_status == :idle
       assert assigns(view).chat_task_id == nil
@@ -695,6 +713,7 @@ defmodule EvoDashWeb.HomeLiveTest do
 
     test "new chat prunes the store to the newest 10 chats", %{conn: conn} do
       {:ok, view, _html} = live(conn, "/help")
+      select_workspace(view)
       first_id = assigns(view).chat_id
 
       # Seed 11 more chats directly (the click's prune(10) will drop the 3
@@ -704,7 +723,7 @@ defmodule EvoDashWeb.HomeLiveTest do
       html = render_click(view, "new_chat", %{})
       new_id = assigns(view).chat_id
 
-      assert html =~ "Start a conversation"
+      assert html =~ "What shall we build next?"
       assert EvoDash.ChatHistory.current_chat_id() == new_id
       assert length(EvoDash.ChatHistory.list_chats()) == 10
       refute first_id in EvoDash.ChatHistory.list_chats()
@@ -975,7 +994,7 @@ defmodule EvoDashWeb.HomeLiveTest do
       send(view.pid, {:agent_removed, 1, node()})
 
       html = render(view)
-      assert page_heading(html) == "Genesis Assistant"
+      assert page_heading(html) == "Assistant"
     end
 
     test "real AgentState ETS row flows through the real get_agent_history path", %{conn: conn} do
@@ -2008,6 +2027,7 @@ defmodule EvoDashWeb.HomeLiveTest do
     test "typed submit locks a canonical model_spec and the resolved slider effort", %{conn: conn} do
       write_provider_profile_config()
       {:ok, view, _html} = live(conn, "/help")
+      select_workspace(view)
       render_change(view, "select_reasoning_effort", %{"reasoning_effort" => "2"})
       assert assigns(view).model_spec == work_spec("high")
 
@@ -2020,7 +2040,7 @@ defmodule EvoDashWeb.HomeLiveTest do
       task = only_reflect_task()
       assert_task_selection(task, work_spec("high"))
       assert opt(task, :mode) == "reflect"
-      assert opt(task, :objective) == "hello"
+      assert opt(task, :objective) == workspace_objective("hello")
       refute inspect(task.opts) =~ "server-only-test-secret"
       cleanup_task_on_exit(task.id)
     end
@@ -2028,6 +2048,7 @@ defmodule EvoDashWeb.HomeLiveTest do
     test "explicit Auto after a pin survives remount and submits no model override", %{conn: conn} do
       write_provider_profile_config()
       {:ok, view, _html} = live(conn, "/help")
+      select_workspace(view)
       assert assigns(view).model_spec == work_spec()
       render_change(view, "select_provider_profile", %{"provider_profile_id" => ""})
       assert assigns(view).model_spec == %{}
@@ -2049,7 +2070,7 @@ defmodule EvoDashWeb.HomeLiveTest do
       task = only_reflect_task()
       assert_auto_task(task)
       assert opt(task, :mode) == "reflect"
-      assert opt(task, :objective) == "auto please"
+      assert opt(task, :objective) == workspace_objective("auto please")
       cleanup_task_on_exit(task.id)
     end
 
@@ -2136,7 +2157,8 @@ defmodule EvoDashWeb.HomeLiveTest do
       conn: conn
     } do
       write_provider_profile_config()
-      {:ok, view, html} = live(conn, "/help")
+      {:ok, view, _html} = live(conn, "/help")
+      html = select_workspace(view)
 
       # The submit control lives in the same control bar row as the capsule.
       assert present?(html, "#chat-composer-controls button[type=\"submit\"]")
@@ -2156,7 +2178,7 @@ defmodule EvoDashWeb.HomeLiveTest do
       task = only_reflect_task()
       assert_task_selection(task, work_spec())
       assert opt(task, :mode) == "reflect"
-      assert opt(task, :objective) == "sent from the composer"
+      assert opt(task, :objective) == workspace_objective("sent from the composer")
       cleanup_task_on_exit(task.id)
     end
 
@@ -2189,7 +2211,10 @@ defmodule EvoDashWeb.HomeLiveTest do
         chat_draft: "keep this draft"
       })
 
-      {:ok, view, html} = live(conn, "/help")
+      {:ok, view, _html} = live(conn, "/help")
+      # Select the workspace FIRST so the disabled submit button below is
+      # attributable to the malformed selection, not to the missing workspace.
+      html = select_workspace(view)
       assert assigns(view).model_selection_error == :invalid_model_spec
       assert disabled?(html, ~s(#chat-form button[type="submit"]))
       html = render_submit(view, "send_message", %{"message" => "keep this draft"})
@@ -2235,44 +2260,56 @@ defmodule EvoDashWeb.HomeLiveTest do
       assert selected_reasoning_label(html) == "High"
     end
 
-    test "suggestion-chip send locks the same canonical selection as typed submit", %{conn: conn} do
+    test "suggestion draft and explicit submit lock the same canonical selection as typed submit",
+         %{conn: conn} do
       write_provider_profile_config()
       {:ok, view, _html} = live(conn, "/help")
+      select_workspace(view)
+
+      view |> element(~s(button[phx-value-kind="tasks"])) |> render_click()
+      draft = assigns(view).chat_draft
+      assert draft != ""
 
       send_and_await_terminal(fn ->
-        view |> element(~s(button[phx-value-message="Show my running tasks"])) |> render_click()
+        render_submit(view, "send_message", %{"message" => draft})
       end)
 
       task = only_reflect_task()
       assert_task_selection(task, work_spec())
       assert opt(task, :mode) == "reflect"
-      assert opt(task, :objective) == "Show my running tasks"
+      assert opt(task, :objective) == workspace_objective(draft)
       cleanup_task_on_exit(task.id)
     end
 
-    test "suggestion-chip send on explicit Auto omits all model overrides", %{conn: conn} do
+    test "suggestion draft and submit on explicit Auto omits all model overrides", %{conn: conn} do
       write_provider_profile_config()
       {:ok, view, _html} = live(conn, "/help")
+      select_workspace(view)
       render_change(view, "select_provider_profile", %{"provider_profile_id" => ""})
 
+      view |> element(~s(button[phx-value-kind="plan"])) |> render_click()
+      draft = assigns(view).chat_draft
+      assert draft != ""
+
       send_and_await_terminal(fn ->
-        view |> element(~s(button[phx-value-message="Start a task for me"])) |> render_click()
+        render_submit(view, "send_message", %{"message" => draft})
       end)
 
       task = only_reflect_task()
       assert_auto_task(task)
       assert opt(task, :mode) == "reflect"
-      assert opt(task, :objective) == "Start a task for me"
+      assert opt(task, :objective) == workspace_objective(draft)
       cleanup_task_on_exit(task.id)
     end
 
     test "new chat retains its same-node canonical pin and locks the next send", %{conn: conn} do
       write_provider_profile_config()
       {:ok, view, _html} = live(conn, "/help")
+      select_workspace(view)
       render_change(view, "select_reasoning_effort", %{"reasoning_effort" => "2"})
       old_chat_id = assigns(view).chat_id
       html = render_click(view, "new_chat", %{})
-      assert html =~ "Start a conversation"
+      assert html =~ "What shall we build next?"
       assert assigns(view).chat_id != old_chat_id
       assert assigns(view).transcript == []
       assert assigns(view).model_spec == work_spec("high")
@@ -2285,7 +2322,7 @@ defmodule EvoDashWeb.HomeLiveTest do
       task = only_reflect_task()
       assert_task_selection(task, work_spec("high"))
       assert opt(task, :mode) == "reflect"
-      assert opt(task, :objective) == "after new chat"
+      assert opt(task, :objective) == workspace_objective("after new chat")
       cleanup_task_on_exit(task.id)
     end
   end
@@ -2351,10 +2388,10 @@ defmodule EvoDashWeb.HomeLiveTest do
       # The exact production event sequence, rendering after each step.
       send(view.pid, {:task_updated, "t_crash", :running, node()})
       html = render(view)
-      assert page_heading(html) == "Genesis Assistant"
+      assert page_heading(html) == "Assistant"
       send(view.pid, {:agent_updated, agent_id, [message_count: 2], node()})
       html = render(view)
-      assert page_heading(html) == "Genesis Assistant"
+      assert page_heading(html) == "Assistant"
 
       send(
         view.pid,
@@ -2370,7 +2407,7 @@ defmodule EvoDashWeb.HomeLiveTest do
       )
 
       html = render(view)
-      assert page_heading(html) == "Genesis Assistant"
+      assert page_heading(html) == "Assistant"
       # The real history fetch lands: 6 messages (5 real + the empty-content
       # assistant) — nil metadata, thinking parts, tool_calls and all.
       wait_until(fn -> assigns(view)[:agent_message_count] == 6 end)
@@ -2395,7 +2432,7 @@ defmodule EvoDashWeb.HomeLiveTest do
 
       send(view.pid, {:task_updated, "t_crash", :completed, node()})
       html = render(view)
-      assert page_heading(html) == "Genesis Assistant"
+      assert page_heading(html) == "Assistant"
       wait_until(fn -> assigns(view).chat_status == :idle end)
       html = render(view)
       assert html =~ "final reflect answer"
@@ -2512,7 +2549,7 @@ defmodule EvoDashWeb.HomeLiveTest do
       wait_until(fn -> assigns(view)[:tasks_reload_pending] == false end)
 
       html = render(view)
-      assert page_heading(html) == "Genesis Assistant"
+      assert page_heading(html) == "Assistant"
     end
 
     test "nil-status (review-mutation) broadcast is a no-op", %{conn: conn} do
@@ -2520,7 +2557,7 @@ defmodule EvoDashWeb.HomeLiveTest do
       seed_running_chat(view)
       send(view.pid, {:task_updated, "t1", nil, node()})
       html = render(view)
-      assert page_heading(html) == "Genesis Assistant"
+      assert page_heading(html) == "Assistant"
       assert assigns(view).chat_status == :running
       assert assigns(view).chat_task_id == "t1"
       assert assigns(view).chat_task_status == nil
@@ -2581,10 +2618,11 @@ defmodule EvoDashWeb.HomeLiveTest do
 
     test "stop with no task is a no-op", %{conn: conn} do
       {:ok, view, _html} = live(conn, "/help")
+      select_workspace(view)
       html = render_click(view, "stop", %{})
       assert assigns(view).chat_status == :idle
       assert assigns(view).chat_task_id == nil
-      assert html =~ "Start a conversation"
+      assert html =~ "What shall we build next?"
     end
   end
 
@@ -3069,6 +3107,19 @@ defmodule EvoDashWeb.HomeLiveTest do
       refute present?(html, approval_button("eval-1", "approve"))
     end
 
+    @tag :assistant_approval_history
+    test "switching back to a running conversation recovers its approval cards", %{conn: conn} do
+      previous = seed_restorable_approval_chat()
+      EvoDash.ChatHistory.new_chat()
+      request = eval_request()
+      Application.put_env(:evo_dash, :approval_pending_runner, fn _source -> [request] end)
+      {:ok, view, _} = live(conn, "/help")
+      render_click(view, "switch_chat", %{"id" => to_string(previous)})
+      wait_until(fn -> assigns(view).pending_approvals != [] end)
+      assert [%{request_id: "eval-1"}] = assigns(view).pending_approvals
+      assert has_element?(view, approval_button("eval-1", "approve"))
+    end
+
     test "restored chats recover a real list-returning pending snapshot off-process", %{
       conn: conn
     } do
@@ -3234,7 +3285,7 @@ defmodule EvoDashWeb.HomeLiveTest do
     refute_receive :legacy_source_probe, 100
     refute has_element?(view, "#genesis-source-gate")
     refute has_element?(view, "textarea[name='message'][disabled]")
-    assert has_element?(view, "button[phx-click='send_message']")
+    assert has_element?(view, "button[phx-click='draft_suggestion']")
   end
 
   describe "node-awareness" do
@@ -3260,6 +3311,50 @@ defmodule EvoDashWeb.HomeLiveTest do
       :ok
     end
 
+    @tag :assistant_project_scope
+    test "pending remote project lists reject local fallback results", %{conn: conn} do
+      {:ok, _} =
+        EvoGit.RemoteConnections.save(%{
+          ssh_target: "pending@host",
+          id: "pending-projects",
+          name: "Pending"
+        })
+
+      start_supervised!(
+        {EvoDashWeb.HomeLiveTest.ConnectionManager,
+         {"pending-projects", %{phase: :connecting, node: nil, last_error: nil}}},
+        id: :pending_projects_manager
+      )
+
+      {:ok, view, _} = live(conn, "/help?node=pending-projects")
+      assert assigns(view).current_node == node()
+      seq = assigns(view).recent_projects_seq
+
+      send(
+        view.pid,
+        {{:recent_projects_loaded, seq, node()},
+         {:ok, [%{path: "/private/local", name: "Local"}]}}
+      )
+
+      render(view)
+      assert assigns(view).recent_projects == []
+      assert assigns(view).workspace == nil
+    end
+
+    @tag :assistant_project_scope
+    test "a project reload clears the previous list before its async reply", %{conn: conn} do
+      {:ok, view, _} = live(conn, "/help")
+      seed_chat_state(view, %{recent_projects: [%{path: "/previous/project", name: "Previous"}]})
+      :sys.suspend(EvoGit.VCT)
+
+      try do
+        render_patch(view, "/help")
+        assert assigns(view).recent_projects == []
+      after
+        :sys.resume(EvoGit.VCT)
+      end
+    end
+
     test "?node= resolves the remote node", %{conn: conn} do
       {:ok, view, _html} = live(conn, "/help?node=test-remote")
       assert assigns(view).current_node == :"genesis_remote@127.0.0.1"
@@ -3270,6 +3365,7 @@ defmodule EvoDashWeb.HomeLiveTest do
       conn: conn
     } do
       {:ok, view, _html} = live(conn, "/help?node=test-remote")
+      select_workspace(view)
       wait_until(fn -> not assigns(view).model_select_loading end)
       render_change(view, "chat_input", %{"message" => "hi remote"})
       html = render_submit(view, "send_message", %{"message" => "hi remote"})
@@ -3301,9 +3397,13 @@ defmodule EvoDashWeb.HomeLiveTest do
       html = render(view)
       refute html =~ "The task failed."
       # Patching back to "/help" (no ?node=) switches to local → a NEW chat.
-      html = render_patch(view, "/help")
+      render_patch(view, "/help")
       assert assigns(view).current_node == node()
-      assert html =~ "Start a conversation"
+      assert assigns(view).workspace == nil
+      # Workspace selection is node-scoped, so the local node needs its own
+      # selection before the post-reset empty state can render.
+      html = select_workspace(view)
+      assert html =~ "What shall we build next?"
       assert assigns(view).chat_status == :idle
       assert assigns(view).chat_task_id == nil
       new_id = assigns(view).chat_id
@@ -3343,6 +3443,7 @@ defmodule EvoDashWeb.HomeLiveTest do
 
       html = render_patch(view, "/help")
       assert assigns(view).current_node == node()
+      assert assigns(view).workspace == nil
       assert assigns(view).chat_id not in [local_chat_id, remote_chat_id]
       # A different node gets its own configured default, NOT the earlier high pin.
       assert assigns(view).model_spec == work_spec()
@@ -3389,8 +3490,96 @@ defmodule EvoDashWeb.HomeLiveTest do
       refute html =~ "Download the Genesis source to start chatting."
       refute disabled?(html, ~s(textarea[name="message"]))
       assert disabled?(html, ~s(#chat-form button[type="submit"]))
-      assert html =~ "Show my running tasks"
+      assert html =~ "Follow my tasks"
     end
+  end
+
+  @tag :assistant_redesign
+  test "project list responses never choose a directory on the user's behalf", %{conn: conn} do
+    {:ok, view, _} = live(conn, "/help")
+    seq = assigns(view).recent_projects_seq
+
+    send(
+      view.pid,
+      {{:recent_projects_loaded, seq, node()},
+       {:ok, [%{path: "/another/project", name: "Another"}]}}
+    )
+
+    render(view)
+    assert assigns(view).workspace == nil
+  end
+
+  @tag :assistant_redesign
+  test "dismissed project requests cannot overwrite a later conversation", %{conn: conn} do
+    {:ok, view, _} = live(conn, "/help")
+
+    for event <- [
+          "close_workspace",
+          "toggle_workspace",
+          "toggle_history",
+          "new_chat"
+        ] do
+      render_click(view, "dismiss_panels")
+      render_click(view, "toggle_workspace")
+      scope = {assigns(view).current_node_id, assigns(view).current_node || node()}
+      seq = assigns(view).workspace_request_seq
+      chat_id = assigns(view).chat_id
+      seed_chat_state(view, %{workspace_loading: true})
+      render_click(view, event)
+
+      send(
+        view.pid,
+        {:assistant_workspace_opened, scope, seq, chat_id, {:ok, "/late/project", []}}
+      )
+
+      render(view)
+      refute assigns(view).workspace == "/late/project"
+      assert assigns(view).workspace_loading == false
+    end
+  end
+
+  @tag :assistant_redesign
+  test "assistant opens a project in place without discarding a draft", %{conn: conn} do
+    {:ok, view, _} = live(conn, "/help")
+    render_change(view, "chat_input", %{"message" => "Keep this plan"})
+    view |> element("#assistant-project-toggle") |> render_click()
+    assert has_element?(view, "#assistant-workspace-panel")
+    path = Path.join(System.tmp_dir!(), "assistant_ui_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(path)
+    on_exit(fn -> File.rm_rf!(path) end)
+    view |> form("#assistant-open-project-form", %{"path" => path}) |> render_submit()
+    wait_until(fn -> assigns(view).workspace == path end)
+    assert assigns(view).chat_draft == "Keep this plan"
+    refute has_element?(view, "#assistant-workspace-panel")
+    assert has_element?(view, "#assistant-project-toggle")
+  end
+
+  @tag :assistant_redesign
+  test "typing is available before choosing a project and while a reply runs", %{conn: conn} do
+    {:ok, view, _} = live(conn, "/help")
+    assert has_element?(view, "#assistant-message:not([disabled])")
+    assert has_element?(view, "#assistant-send[disabled]")
+    seed_running_chat(view)
+    render_change(view, "chat_input", %{"message" => "A correction for later"})
+    assert has_element?(view, "#assistant-message:not([disabled])")
+
+    assert EvoDash.ChatHistory.get_state(assigns(view).chat_id).chat_draft ==
+             "A correction for later"
+  end
+
+  @tag :assistant_redesign
+  test "history returns to an earlier draft and stays on the assistant page", %{conn: conn} do
+    {:ok, view, _} = live(conn, "/help")
+    first = assigns(view).chat_id
+    render_change(view, "chat_input", %{"message" => "First conversation draft"})
+    render_click(view, "new_chat")
+    refute assigns(view).chat_id == first
+    view |> element("#assistant-history-toggle") |> render_click()
+    assert has_element?(view, "#assistant-history")
+    render_click(view, "switch_chat", %{"id" => first})
+    assert assigns(view).chat_id == first
+    assert assigns(view).chat_draft == "First conversation draft"
+    assert has_element?(view, "#assistant-shell")
   end
 end
 
